@@ -1,6 +1,4 @@
 import 'dart:io';
-import 'package:documentreader/bookmark/bookmark.dart';
-import 'package:documentreader/home/homescreen.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -9,7 +7,8 @@ import 'package:get/get.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../constant/common_method.dart';
-import '../constant/constant.dart';
+import '../services/bookmark_service.dart';
+import '../services/file_services.dart';
 
 class MultiSelectScreen extends StatefulWidget {
   final List<File> files;
@@ -29,15 +28,20 @@ class MultiSelectScreen extends StatefulWidget {
 
 class _MultiSelectScreenState extends State<MultiSelectScreen> {
   List<File> _selectedFiles = [];
+  final FileService _fileService = FileService();
+
+  bool _isSelected(File file) => _selectedFiles.any((f) => f.path == file.path);
   bool _selectAll = false;
 
   void _toggleFileSelection(File file) {
     setState(() {
-      if (_selectedFiles.contains(file)) {
-        _selectedFiles.remove(file);
+      if (_isSelected(file)) {
+        _selectedFiles.removeWhere((f) => f.path == file.path);
       } else {
         _selectedFiles.add(file);
       }
+      _selectAll = widget.files.isNotEmpty &&
+          _selectedFiles.length == widget.files.length;
     });
   }
 
@@ -63,8 +67,8 @@ class _MultiSelectScreenState extends State<MultiSelectScreen> {
       );
     } catch (e) {
       // Handle error appropriately (show snackbar, dialog, etc.)
-      print('Error sharing files: $e');
-      // Consider showing a snackbar to the user
+      debugPrint('Error sharing files: $e');
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Failed to share files'),
@@ -76,64 +80,75 @@ class _MultiSelectScreenState extends State<MultiSelectScreen> {
 
   void _deleteFiles() async {
     if (_selectedFiles.isEmpty) return; // Added safety check
-    
-    final bool confirm = await _showDeleteConfirmation();
-    if (!confirm) return;
 
-    // 🔹 Temporarily store deleted files for undo
+    final bool confirm = await _showDeleteConfirmation();
+    if (!confirm || !mounted) return;
+
+    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
     final List<File> filesToDelete = List<File>.from(_selectedFiles);
-    final List<String> filePaths = filesToDelete.map((file) => file.path).toList();
+
+    // Move the files aside first so Undo can really bring them back.
+    final Map<String, File> staged = {};
+    final List<String> unbookmarked = [];
+    for (final File file in filesToDelete) {
+      try {
+        staged[file.path] = await _fileService.stageDelete(file);
+        if (BookmarkService().isBookmarked(file)) {
+          await BookmarkService().removeBookmark(file.path);
+          unbookmarked.add(file.path);
+        }
+      } catch (e) {
+        debugPrint('Error deleting file ${file.path}: $e');
+      }
+    }
+    if (!mounted) return;
 
     setState(() {
-      widget.files.removeWhere((file) => _selectedFiles.contains(file));
+      widget.files.removeWhere((file) => staged.containsKey(file.path));
       _selectedFiles.clear();
       _selectAll = false; // Reset select all when files are deleted
     });
 
-    // 🔹 Show Snackbar with UNDO option
-    final undoSnackBar = ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text("Files deleted"),
-        action: SnackBarAction(
-          label: "Undo",
-          textColor: Colors.white,
-          onPressed: () {
-            // 🔥 Restore deleted files
-            setState(() {
-              widget.files.addAll(filesToDelete);
-            });
-          },
-        ),
-        duration: const Duration(seconds: 4),
-        backgroundColor: Colors.redAccent,
-      ),
-    );
+    if (staged.length < filesToDelete.length) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(
+            '${filesToDelete.length - staged.length} file(s) could not be deleted'),
+      ));
+    }
+    if (staged.isEmpty) return;
 
-    // 🔥 Wait 4 seconds before deleting permanently
-    await Future.delayed(const Duration(seconds: 4));
+    messenger.hideCurrentSnackBar();
+    final SnackBarClosedReason reason = await messenger
+        .showSnackBar(
+          SnackBar(
+            content: const Text("Files deleted"),
+            action: SnackBarAction(
+              label: "Undo",
+              textColor: Colors.white,
+              onPressed: () {},
+            ),
+            duration: const Duration(seconds: 4),
+            backgroundColor: Colors.redAccent,
+          ),
+        )
+        .closed;
 
-    // Check if snackbar is still visible (user didn't undo)
-    if (ScaffoldMessenger.of(context).mounted) {
-      // 🔹 If the user did NOT press "Undo", delete files permanently
-      bool shouldDeletePermanently = true;
-      for (final file in filesToDelete) {
-        if (widget.files.contains(file)) {
-          shouldDeletePermanently = false;
-          break;
+    if (reason == SnackBarClosedReason.action) {
+      final List<File> restored = [];
+      for (final MapEntry<String, File> e in staged.entries) {
+        try {
+          restored.add(await _fileService.restoreStaged(e.value, e.key));
+          if (unbookmarked.contains(e.key)) {
+            await BookmarkService().addBookmark(e.key);
+          }
+        } catch (err) {
+          debugPrint('Error restoring ${e.key}: $err');
         }
       }
-
-      if (shouldDeletePermanently) {
-        for (final path in filePaths) {
-          final file = File(path);
-          if (await file.exists()) {
-            try {
-              await file.delete();
-            } catch (e) {
-              print('Error deleting file $path: $e');
-            }
-          }
-        }
+      if (mounted) setState(() => widget.files.addAll(restored));
+    } else {
+      for (final File file in staged.values) {
+        await _fileService.commitDelete(file);
       }
     }
   }
@@ -204,13 +219,9 @@ class _MultiSelectScreenState extends State<MultiSelectScreen> {
       backgroundColor: Colors.white,
       appBar: AppBar(
         leading: IconButton(
-          onPressed: () {
-            if (widget.name == "HomeScreen") {
-              Get.offAll(() =>  HomeScreen()); // Use offAll to prevent going back
-            } else {
-              Get.offAll(() =>  BookmarkScreen());
-            }
-          },
+          // Return to the screen that opened multi-select. offAll() rebuilt
+          // the app without its bottom bar and rescanned storage.
+          onPressed: () => Get.back(),
           icon: const Icon(
             Icons.arrow_back_ios_new,
             color: Colors.black,
@@ -260,17 +271,20 @@ class _MultiSelectScreenState extends State<MultiSelectScreen> {
                     final file = widget.files[index];
                     final fileName = file.path.split('/').last;
                     final iconPath = getIconForFile(file.path);
-                    final isSelected = _selectedFiles.contains(file);
-                    final isBookmarked = bookmarkedFiles.any((f) => f.path == file.path);
+                    final isSelected = _isSelected(file);
+                    final isBookmarked = BookmarkService().isBookmarked(file);
 
                     return CupertinoListTile(
+                      key: ValueKey(file.path),
                       backgroundColor: isSelected
                           ? Colors.redAccent.withOpacity(0.1)
                           : Colors.transparent,
-                      leading: SvgPicture.asset(
+                      leading: Image.asset(
                         iconPath,
                         width: 40.w,
                         height: 40.h,
+                        cacheWidth: 144,
+                        cacheHeight: 144,
                       ),
                       title: Text(
                         fileName,

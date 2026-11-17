@@ -4,7 +4,9 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:get/get.dart';
 // import 'package:google_mobile_ads/google_mobile_ads.dart';
 
+import 'package:provider/provider.dart';
 import '../constant/drawer.dart';
+import '../controller/bottom_nav_bar_controllwe.dart';
 
 class SettingScreen extends StatefulWidget {
   const SettingScreen({super.key});
@@ -69,7 +71,15 @@ class _SettingScreenState extends State<SettingScreen> {
       appBar: AppBar(
         automaticallyImplyLeading: false,
         backgroundColor: Colors.white,
-        leading: IconButton(onPressed: (){Get.back();}, icon: Icon(Icons.arrow_back_ios_new,color: Colors.black,)),
+        leading: IconButton(onPressed: (){
+          // As a bottom-bar tab there is no route to pop: popping the root
+          // route left a black screen. Go to the Home tab instead.
+          if (Navigator.of(context).canPop()) {
+            Get.back();
+          } else {
+            context.read<NavigationProvider>().changeIndex(0);
+          }
+        }, icon: Icon(Icons.arrow_back_ios_new,color: Colors.black,)),
         title: Text("Settings",style: TextStyle(color: Colors.black,fontFamily: "Inter"),),
       ),
       body: Column(

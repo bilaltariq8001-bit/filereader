@@ -58,12 +58,17 @@ class PdfService {
       return {};
     }
   }
+  /// Opens [path] in the viewer. [onLoaded] runs once the viewer reports
+  /// the document as loaded, which is when viewer commands (search, tool
+  /// modes) can actually act on it; calling them on a timer before that
+  /// silently did nothing or failed.
   Future<String> openDocument(String path, {
     String? password,
     Config? customConfig,
     bool showTip = true,
+    Future<void> Function()? onLoaded,
   }) async {
-    await PdftronFlutter.initialize();
+    await _ensureInitialized();
 
     final String filePath = path.startsWith("file://") ? path : "file://$path";
 
@@ -107,17 +112,47 @@ class PdfService {
       Buttons.moreItemsButton,
     ];
 
-    await PdftronFlutter.openDocument(filePath, password: password, config: config);
+    CancelListener? cancelLoaded;
+    CancelListener? cancelError;
+    void stopListening() {
+      cancelLoaded?.call();
+      cancelError?.call();
+      cancelLoaded = null;
+      cancelError = null;
+    }
 
-    if (showTip && context.mounted) {
-      Future.delayed(const Duration(milliseconds: 800), () {
-        if (context.mounted) {
-          showTextSelectionTip();
+    if (onLoaded != null) {
+      cancelLoaded = startDocumentLoadedListener((_) async {
+        stopListening();
+        try {
+          await onLoaded();
+        } catch (e) {
+          debugPrint('Viewer action failed: $e');
         }
       });
+      cancelError = startDocumentErrorListener(stopListening);
+    }
+
+    try {
+      await PdftronFlutter.openDocument(filePath, password: password, config: config);
+    } catch (e) {
+      stopListening();
+      rethrow;
+    }
+
+    if (showTip && context.mounted) {
+      showTextSelectionTip();
     }
 
     return filePath;
+  }
+
+  static bool _initialized = false;
+
+  Future<void> _ensureInitialized() async {
+    if (_initialized) return;
+    await PdftronFlutter.initialize();
+    _initialized = true;
   }
   /// ============================================
   /// DOCUMENT OPERATIONS

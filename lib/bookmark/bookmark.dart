@@ -1,29 +1,25 @@
 import 'dart:io';
 import 'package:documentreader/constant/common_method.dart';
-import 'package:documentreader/home/homescreen.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
-// import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:lottie/lottie.dart';
-import 'package:pdftron_flutter/pdftron_flutter.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-
-import '../adhelper/adhelper.dart';
-import '../constant/color.dart';
-import '../constant/constant.dart';
 import '../multiselect/MultiSelectScreen.dart';
 import '../search/searchscreen.dart';
+import '../services/bookmark_service.dart';
+import '../services/file_services.dart';
+import '../services/pdf_dervices.dart';
 import '../setting/settingscreen.dart';
+import '../widget/file_meta.dart';
 
 class BookmarkScreen extends StatefulWidget {
   const BookmarkScreen({Key? key}) : super(key: key);
 
   @override
+  // ignore: library_private_types_in_public_api
   _BookmarkScreenState createState() => _BookmarkScreenState();
 }
 
@@ -31,279 +27,61 @@ class _BookmarkScreenState extends State<BookmarkScreen>
     with SingleTickerProviderStateMixin {
   TabController? _tabController;
   bool _openedWithPdfTron = false;
-
-  // InterstitialAd? interstitialAd;
-  // BannerAd? bannerAd;
-
-  bool isBannerAdLoaded = false;
   bool isLoading = true;
-  final GlobalKey<RefreshIndicatorState> _refreshIndicatorKey =
-      GlobalKey<RefreshIndicatorState>();
+
+  final BookmarkService _bookmarkService = BookmarkService();
+  final FileService _fileService = FileService();
+  late final PdfService _pdfService = PdfService(context: context);
+
+  List<File> bookmarkedFiles = [];
+  List<File> bookmarkedPdfFiles = [];
+  List<File> bookmarkedWordFiles = [];
+  List<File> bookmarkedPptFiles = [];
+  List<File> bookmarkedExcelFiles = [];
+
+  /// Lets the search screen opened from here follow changes.
+  final ValueNotifier<int> _listsChanged = ValueNotifier<int>(0);
+
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    _listsChanged.value++;
+  }
 
   @override
   void initState() {
     super.initState();
-    // AdHelper.loadInterstitialAd((ad) {
-    //   setState(() {
-    //     interstitialAd = ad;
-    //   });
-    // });
-
     _tabController = TabController(length: 5, vsync: this);
-    _requestPermission();
-    _tabController!.addListener(() {
-      if (mounted) {
-        setState(() {});
-      }
-    });
-    _loadFiles();
-    _loadBannerAd();
+    // Bookmarks are a stored list of paths; no storage scan is needed here.
+    _loadBookmarks();
   }
 
-  Future<void> _loadFiles() async {
+  @override
+  void dispose() {
+    _tabController?.dispose();
+    _listsChanged.dispose();
+    super.dispose();
+  }
+
+  void _apply(BookmarkData data) {
     if (!mounted) return;
-
     setState(() {
-      isLoading = true;
+      bookmarkedFiles = data.bookmarkedFiles;
+      bookmarkedPdfFiles = data.bookmarkedPdfFiles;
+      bookmarkedWordFiles = data.bookmarkedWordFiles;
+      bookmarkedPptFiles = data.bookmarkedPptFiles;
+      bookmarkedExcelFiles = data.bookmarkedExcelFiles;
     });
-
-    try {
-      final Directory rootDirectory = Directory('/storage/emulated/0/');
-      if (await rootDirectory.exists()) {
-        final List<FileSystemEntity> allFilesList =
-            await _getAllFiles(rootDirectory);
-        
-        if (!mounted) return;
-        
-        setState(() {
-          allFiles = allFilesList.whereType<File>().where((file) {
-            final String path = file.path.toLowerCase();
-            return path.endsWith(Constants.pdf) ||
-                path.endsWith(Constants.doc) ||
-                path.endsWith(Constants.docx) ||
-                path.endsWith(Constants.ppt) ||
-                path.endsWith(Constants.pptx) ||
-                path.endsWith(Constants.xlsx) ||
-                path.endsWith(Constants.xls);
-          }).toList();
-
-          pdfFiles = allFiles
-              .where((file) => file.path.toLowerCase().endsWith(Constants.pdf))
-              .toList();
-
-          wordFiles = allFiles
-              .where((file) =>
-                  file.path.toLowerCase().endsWith(Constants.doc) ||
-                  file.path.toLowerCase().endsWith(Constants.docx))
-              .toList();
-
-          pptFiles = allFiles
-              .where((file) =>
-                  file.path.toLowerCase().endsWith(Constants.ppt) ||
-                  file.path.toLowerCase().endsWith(Constants.pptx))
-              .toList();
-
-          excelFiles = allFiles
-              .where((file) =>
-                  file.path.toLowerCase().endsWith(Constants.xlsx) ||
-                  file.path.toLowerCase().endsWith(Constants.xls))
-              .toList();
-        });
-      }
-    } catch (e) {
-      print('Error loading files: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to load files'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          isLoading = false;
-        });
-      }
-    }
   }
 
-  void _loadBannerAd() {
-    // Dispose the previous banner ad if exists
-    // bannerAd?.dispose();
-    // bannerAd = null;
-    isBannerAdLoaded = false;
-
-    // Load new banner ad
-    // bannerAd = BannerAd(
-    //   size: AdSize.banner,
-    //   adUnitId: 'ca-app-pub-3940256099942544/6300978111',
-    //   listener: BannerAdListener(
-    //     onAdLoaded: (ad) {
-    //       setState(() {
-    //         isBannerAdLoaded = true;
-    //       });
-    //     },
-    //     onAdFailedToLoad: (ad, error) {
-    //       print("Banner Ad failed to load: $error");
-    //       isBannerAdLoaded = false;
-    //     },
-    //   ),
-    //   request: AdRequest(),
-    // );
-
-    // bannerAd!.load();
-  }
-
-  Future<void> _requestPermission() async {
-    if (Platform.isAndroid) {
-      final PermissionStatus storageStatus = await Permission.storage.status;
-      final PermissionStatus manageStorageStatus =
-          await Permission.manageExternalStorage.status;
-
-      if (storageStatus.isGranted || manageStorageStatus.isGranted) {
-        await _loadBookmarks();
-      } else {
-        final Map<Permission, PermissionStatus> statuses = await [
-          Permission.storage,
-          Permission.manageExternalStorage,
-        ].request();
-
-        if (statuses[Permission.storage]?.isGranted == true ||
-            statuses[Permission.manageExternalStorage]?.isGranted == true) {
-          await _loadBookmarks();
-        } else {
-          _showPermissionDeniedDialog();
-        }
-      }
-    } else {
-      await _loadBookmarks();
-    }
-  }
-
-  void _showPermissionDeniedDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Permission Required'),
-        content: const Text('Storage permission is required to access your documents. '
-            'Please grant permission in app settings.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              openAppSettings();
-            },
-            child: const Text('Open Settings'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<List<FileSystemEntity>> _getAllFiles(Directory directory) async {
-    final List<FileSystemEntity> files = [];
-    try {
-      await for (final FileSystemEntity entity
-          in directory.list(recursive: false, followLinks: false)) {
-        if (entity is File) {
-          files.add(entity);
-        } else if (entity is Directory) {
-          try {
-            files.addAll(await _getAllFiles(entity));
-          } catch (e) {
-            // Ignore directories with permission issues
-          }
-        }
-      }
-    } catch (e) {
-      // Handle directory access errors
-    }
-    return files;
-  }
-
-  Future<void> _openWithPdfTron(String path) async {
-    if (_openedWithPdfTron) return;
-
-    _openedWithPdfTron = true;
-    try {
-      await PdftronFlutter.initialize();
-      final String filePath =
-          path.startsWith("file://") ? path : "file://$path";
-      await PdftronFlutter.openDocument(filePath);
-    } catch (e) {
-      print('Error opening file with PDFTron: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to open file'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      _openedWithPdfTron = false;
-    }
-  }
-
-  Future<void> _loadBookmarks() async {
+  Future<void> _loadBookmarks({bool showSpinner = true}) async {
     if (!mounted) return;
-
-    setState(() {
-      isLoading = true;
-    });
-
+    if (showSpinner) setState(() => isLoading = true);
     try {
-      final SharedPreferences prefs = await SharedPreferences.getInstance();
-      final List<String>? paths = prefs.getStringList("bookmarks");
-
-      if (paths != null) {
-        final List<File> tempBookmarkedFiles = paths.map((path) => File(path)).toList();
-
-        // Remove files that no longer exist
-        final List<File> existingFiles = [];
-        for (final file in tempBookmarkedFiles) {
-          if (await file.exists()) {
-            existingFiles.add(file);
-          }
-        }
-
-        if (!mounted) return;
-
-        setState(() {
-          bookmarkedFiles = existingFiles;
-          bookmarkedPdfFiles = bookmarkedFiles
-              .where((file) => file.path.toLowerCase().endsWith(Constants.pdf))
-              .toList();
-          bookmarkedWordFiles = bookmarkedFiles
-              .where((file) =>
-                  file.path.toLowerCase().endsWith(Constants.doc) ||
-                  file.path.toLowerCase().endsWith(Constants.docx))
-              .toList();
-          bookmarkedPptFiles = bookmarkedFiles
-              .where((file) =>
-                  file.path.toLowerCase().endsWith(Constants.ppt) ||
-                  file.path.toLowerCase().endsWith(Constants.pptx))
-              .toList();
-          bookmarkedExcelFiles = bookmarkedFiles
-              .where((file) =>
-                  file.path.toLowerCase().endsWith(Constants.xlsx) ||
-                  file.path.toLowerCase().endsWith(Constants.xls))
-              .toList();
-        });
-
-        // Save filtered bookmarks
-        final List<String> updatedPaths =
-            bookmarkedFiles.map((file) => file.path).toList();
-        await prefs.setStringList("bookmarks", updatedPaths);
-      }
+      // Drops bookmarks whose file was deleted or moved outside the app.
+      _apply(await _bookmarkService.loadBookmarks(dropMissing: true));
     } catch (e) {
-      print('Error loading bookmarks: $e');
+      debugPrint('Error loading bookmarks: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -313,61 +91,52 @@ class _BookmarkScreenState extends State<BookmarkScreen>
         );
       }
     } finally {
-      if (mounted) {
-        setState(() {
-          isLoading = false;
-        });
-      }
+      if (mounted) setState(() => isLoading = false);
     }
   }
 
-  void _removeBookmark(File file) {
-    setState(() {
-      bookmarkedFiles.remove(file);
-      bookmarkedPdfFiles.remove(file);
-      bookmarkedWordFiles.remove(file);
-      bookmarkedPptFiles.remove(file);
-      bookmarkedExcelFiles.remove(file);
-      saveBookmarks();
-    });
+  Future<void> _openWithPdfTron(String path) async {
+    if (_openedWithPdfTron) return;
+    _openedWithPdfTron = true;
+    try {
+      if (!await File(path).exists()) {
+        _showError('This file no longer exists');
+        _loadBookmarks(showSpinner: false);
+        return;
+      }
+      await _pdfService.openDocument(path, showTip: false);
+    } catch (e) {
+      debugPrint('Error opening file with PDFTron: $e');
+      _showError('Failed to open file');
+    } finally {
+      _openedWithPdfTron = false;
+    }
+  }
 
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.red),
+    );
+  }
+
+  Future<void> _removeBookmark(File file) async {
+    _apply(await _bookmarkService.removeBookmark(file.path));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: const Text("Bookmark removed"),
         action: SnackBarAction(
           label: "Undo",
-          onPressed: () {
-            _restoreBookmark(file);
-          },
+          onPressed: () => _restoreBookmark(file),
         ),
       ),
     );
   }
 
-  void _restoreBookmark(File file) {
-    setState(() {
-      bookmarkedFiles.add(file);
-      final String path = file.path.toLowerCase();
-      if (path.endsWith(Constants.pdf)) {
-        bookmarkedPdfFiles.add(file);
-      } else if (path.endsWith(Constants.doc) || path.endsWith(Constants.docx)) {
-        bookmarkedWordFiles.add(file);
-      } else if (path.endsWith(Constants.ppt) || path.endsWith(Constants.pptx)) {
-        bookmarkedPptFiles.add(file);
-      } else if (path.endsWith(Constants.xlsx) || path.endsWith(Constants.xls)) {
-        bookmarkedExcelFiles.add(file);
-      }
-      saveBookmarks();
-    });
-  }
-
-  @override
-  void dispose() {
-    _tabController?.removeListener(() {});
-    _tabController?.dispose();
-    // bannerAd?.dispose();
-    // interstitialAd?.dispose();
-    super.dispose();
+  Future<void> _restoreBookmark(File file) async {
+    _apply(await _bookmarkService.addBookmark(file.path));
   }
 
   @override
@@ -379,7 +148,9 @@ class _BookmarkScreenState extends State<BookmarkScreen>
       backgroundColor: Colors.white,
       appBar: AppBar(
         leading: IconButton(
-          onPressed: () => Get.offAll(() =>  HomeScreen()),
+          // Go back to where Bookmarks was opened from. offAll() replaced
+          // the whole app with a bare HomeScreen and lost the bottom bar.
+          onPressed: () => Get.back(),
           icon: Icon(Icons.arrow_back_ios_new, color: Colors.black),
         ),
         title: Text("Bookmark",
@@ -389,9 +160,10 @@ class _BookmarkScreenState extends State<BookmarkScreen>
           _buildActionButton(
             iconPath: "assets/search.svg",
             onTap: () {
-              final List<File> filesToSearch = _getCurrentTabBookmarkedFiles();
+              final int tab = _tabController?.index ?? 0;
               Get.to(() => SearchScreen(
-                    files: filesToSearch,
+                    files: () => _bookmarksForTab(tab),
+                    changes: _listsChanged,
                     fileType: _getCurrentFileType(),
                     name: "BookmarkScreen",
                     onShowBottomSheet: showBottomSheet,
@@ -405,13 +177,15 @@ class _BookmarkScreenState extends State<BookmarkScreen>
           SizedBox(width: width / 40),
           _buildActionButton(
             iconPath: "assets/select.svg",
-            onTap: () {
-              final List<File> filesToSelect = _getCurrentTabBookmarkedFiles();
-              Get.to(() => MultiSelectScreen(
+            onTap: () async {
+              final List<File> filesToSelect =
+                  List<File>.from(_getCurrentTabBookmarkedFiles());
+              await Get.to(() => MultiSelectScreen(
                     files: filesToSelect,
                     fileType: _getCurrentFileType(),
                     name: "BookmarkScreen",
                   ));
+              _loadBookmarks(showSpinner: false);
             },
             isTablet: isTablet,
             width: width,
@@ -480,8 +254,11 @@ class _BookmarkScreenState extends State<BookmarkScreen>
     );
   }
 
-  List<File> _getCurrentTabBookmarkedFiles() {
-    switch (_tabController?.index) {
+  List<File> _getCurrentTabBookmarkedFiles() =>
+      _bookmarksForTab(_tabController?.index ?? 0);
+
+  List<File> _bookmarksForTab(int index) {
+    switch (index) {
       case 0:
         return bookmarkedFiles;
       case 1:
@@ -515,13 +292,7 @@ class _BookmarkScreenState extends State<BookmarkScreen>
   }
 
   void showBottomSheet(File file) {
-    final bool isBookmarked = bookmarkedFiles.contains(file);
-    final int fileSizeInBytes = file.lengthSync();
-    final double fileSizeInKB = fileSizeInBytes / 1024;
-    final double fileSizeInMB = fileSizeInKB / 1024;
-    final String formattedSize = fileSizeInMB >= 1
-        ? '${fileSizeInMB.toStringAsFixed(2)} MB'
-        : '${fileSizeInKB.toStringAsFixed(2)} KB';
+    final bool isBookmarked = bookmarkedFiles.any((f) => f.path == file.path);
 
     showModalBottomSheet(
       context: context,
@@ -551,10 +322,12 @@ class _BookmarkScreenState extends State<BookmarkScreen>
                 ],
                 title: Row(
                   children: [
-                    SvgPicture.asset(
+                    Image.asset(
                       iconPath,
                       height: 40.h,
                       width: 40.w,
+                      cacheWidth: 144,
+                      cacheHeight: 144,
                     ),
                     SizedBox(width: 10.w),
                     Expanded(
@@ -573,14 +346,17 @@ class _BookmarkScreenState extends State<BookmarkScreen>
                             maxLines: 1,
                           ),
                           SizedBox(height: 2.h),
-                          Text(
-                            formattedSize,
+                          FileMetaBuilder(
+                            file: file,
+                            builder: (context, stat) => Text(
+                            stat == null ? '' : formatFileSize(stat.size),
                             style: TextStyle(
                               fontWeight: FontWeight.w400,
                               fontFamily: "Inter",
                               fontSize: 12.sp,
                               color: Colors.grey,
                             ),
+                          ),
                           ),
                         ],
                       ),
@@ -608,12 +384,12 @@ class _BookmarkScreenState extends State<BookmarkScreen>
                       label: "Bookmark",
                       iconColor: isBookmarked ? Colors.green : Colors.black,
                       onTap: () {
+                        Navigator.pop(context);
                         if (isBookmarked) {
                           _removeBookmark(file);
                         } else {
                           _restoreBookmark(file);
                         }
-                        Navigator.pop(context);
                       },
                     ),
                     _buildBottomSheetAction(
@@ -692,316 +468,47 @@ class _BookmarkScreenState extends State<BookmarkScreen>
     }
   }
 
+
   void _renameFile(File file) {
-    final String fileName = file.path.split('/').last;
-    final String fileExtension = fileName.contains('.')
-        ? fileName.substring(fileName.lastIndexOf('.'))
-        : '';
-
-    final TextEditingController renameController = TextEditingController(
-        text: fileName.replaceAll(fileExtension, ''));
-
-    showDialog(
+    _fileService.showRenameDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Center(
-            child: Text("Rename",
-                style: TextStyle(fontWeight: FontWeight.bold, fontFamily: "Inter"))),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: renameController,
-                cursorColor: Colors.black,
-                style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontFamily: "Inter",
-                    color: Colors.black),
-                decoration: InputDecoration(
-                  hintText: "Enter new file name",
-                  enabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: color_hint),
-                      borderRadius: BorderRadius.circular(6.r)),
-                  focusedBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: Colors.redAccent),
-                      borderRadius: BorderRadius.circular(6.r)),
-                  contentPadding:
-                      EdgeInsets.symmetric(horizontal: 10.w, vertical: 12.h),
-                ),
-              ),
-              SizedBox(height: 20.h),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  SizedBox(
-                    width: 100.w,
-                    child: OutlinedButton(
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Colors.redAccent),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(6.r)),
-                      ),
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text("Cancel",
-                          style: TextStyle(color: Colors.redAccent, fontFamily: "Inter")),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 100.w,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(6.r)),
-                        backgroundColor: Colors.redAccent,
-                      ),
-                      onPressed: () {
-                        final String newName = renameController.text.trim();
-                        if (newName.isNotEmpty) {
-                          final String newFullName = newName + fileExtension;
-                          Navigator.pop(context);
-                          _performRename(file, newFullName);
-                        }
-                      },
-                      child: const Text("OK",
-                          style: TextStyle(color: Colors.white, fontFamily: "Inter")),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
+      file: file,
+      // FileService renames the file and updates the stored bookmark.
+      onRenamed: (oldFile, newFile) => _loadBookmarks(showSpinner: false),
     );
-  }
-
-  void _performRename(File file, String newName) async {
-    try {
-      final String newPath = '${file.parent.path}/$newName';
-      final File newFile = await file.rename(newPath);
-
-      // Update all file lists
-      void updateFileInList(List<File> list) {
-        final int index = list.indexWhere((f) => f.path == file.path);
-        if (index != -1) {
-          list[index] = newFile;
-        }
-      }
-
-      setState(() {
-        updateFileInList(allFiles);
-        updateFileInList(pdfFiles);
-        updateFileInList(wordFiles);
-        updateFileInList(pptFiles);
-        updateFileInList(excelFiles);
-      });
-
-      // Update bookmarks
-      if (bookmarkedFiles.any((f) => f.path == file.path)) {
-        setState(() {
-          updateFileInList(bookmarkedFiles);
-          updateFileInList(bookmarkedPdfFiles);
-          updateFileInList(bookmarkedWordFiles);
-          updateFileInList(bookmarkedPptFiles);
-          updateFileInList(bookmarkedExcelFiles);
-        });
-        saveBookmarks();
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("File renamed successfully")),
-      );
-    } catch (e) {
-      print('Error renaming file: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Error renaming file")),
-      );
-    }
   }
 
   void _confirmDelete(File file) {
-    final String fileName = file.path.split('/').last;
-
-    showDialog(
+    _fileService.showDeleteConfirmation(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(
-          "Delete $fileName?",
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text("Are you sure you want to permanently delete this file?"),
-            SizedBox(height: 20.h),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                SizedBox(
-                  width: 100.w,
-                  child: OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: Colors.redAccent),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6.r)),
-                    ),
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text("Cancel",
-                        style: TextStyle(color: Colors.redAccent, fontFamily: "Inter")),
-                  ),
-                ),
-                SizedBox(
-                  width: 100.w,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6.r)),
-                      backgroundColor: Colors.redAccent,
-                    ),
-                    onPressed: () {
-                      Navigator.pop(context);
-                      _deleteFile(file);
-                    },
-                    child: const Text("Delete",
-                        style: TextStyle(color: Colors.white, fontFamily: "Inter")),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
+      file: file,
+      onDelete: () => _deleteFile(file),
     );
   }
 
-  void _deleteFile(File file) async {
-    try {
-      if (await file.exists()) {
-        final String filePath = file.path;
-        final bool wasBookmarked = bookmarkedFiles.contains(file);
-
-        // Store file for potential undo
-        final File tempFile = File(filePath);
-
-        // Delete file
-        await file.delete();
-
-        setState(() {
-          // Remove from all lists
-          void removeFileFromList(List<File> list) {
-            list.removeWhere((f) => f.path == filePath);
-          }
-
-          removeFileFromList(allFiles);
-          removeFileFromList(pdfFiles);
-          removeFileFromList(wordFiles);
-          removeFileFromList(pptFiles);
-          removeFileFromList(excelFiles);
-
-          // Remove from bookmarks if bookmarked
-          if (wasBookmarked) {
-            removeFileFromList(bookmarkedFiles);
-            removeFileFromList(bookmarkedPdfFiles);
-            removeFileFromList(bookmarkedWordFiles);
-            removeFileFromList(bookmarkedPptFiles);
-            removeFileFromList(bookmarkedExcelFiles);
-            saveBookmarks();
-          }
-        });
-
-        // Show undo snackbar
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.redAccent,
-            content: const Text("File deleted successfully"),
-            action: SnackBarAction(
-              label: "Undo",
-              textColor: Colors.white,
-              onPressed: () async {
-                try {
-                  // Try to restore the file
-                  await tempFile.create();
-
-                  setState(() {
-                    allFiles.add(tempFile);
-                    final String path = tempFile.path.toLowerCase();
-                    if (path.endsWith(Constants.pdf)) {
-                      pdfFiles.add(tempFile);
-                    } else if (path.endsWith(Constants.doc) ||
-                        path.endsWith(Constants.docx)) {
-                      wordFiles.add(tempFile);
-                    } else if (path.endsWith(Constants.ppt) ||
-                        path.endsWith(Constants.pptx)) {
-                      pptFiles.add(tempFile);
-                    } else if (path.endsWith(Constants.xlsx) ||
-                        path.endsWith(Constants.xls)) {
-                      excelFiles.add(tempFile);
-                    }
-
-                    if (wasBookmarked) {
-                      bookmarkedFiles.add(tempFile);
-                      if (path.endsWith(Constants.pdf)) {
-                        bookmarkedPdfFiles.add(tempFile);
-                      } else if (path.endsWith(Constants.doc) ||
-                          path.endsWith(Constants.docx)) {
-                        bookmarkedWordFiles.add(tempFile);
-                      } else if (path.endsWith(Constants.ppt) ||
-                          path.endsWith(Constants.pptx)) {
-                        bookmarkedPptFiles.add(tempFile);
-                      } else if (path.endsWith(Constants.xlsx) ||
-                          path.endsWith(Constants.xls)) {
-                        bookmarkedExcelFiles.add(tempFile);
-                      }
-                      saveBookmarks();
-                    }
-                  });
-
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content: Text("File restored successfully",
-                            style: TextStyle(
-                                color: Colors.white, fontFamily: "Inter"))),
-                  );
-                } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Failed to restore file")),
-                  );
-                }
-              },
-            ),
-          ),
-        );
-      }
-    } catch (e) {
-      print('Error deleting file: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Error deleting file")),
-      );
+  Future<void> _deleteFile(File file) async {
+    final result = await _fileService.deleteFile(
+      file: file,
+      context: context,
+      allFiles: [],
+      pdfFiles: [],
+      wordFiles: [],
+      pptFiles: [],
+      excelFiles: [],
+      bookmarkedFiles: bookmarkedFiles,
+      onRestored: () => _loadBookmarks(showSpinner: false),
+    );
+    if (result.success) {
+      _apply(await _bookmarkService.loadBookmarks());
     }
   }
 
   Future<void> _refreshFiles() async {
-    if (!mounted) return;
-
-    setState(() {
-      isLoading = true;
-    });
-
-    await _loadFiles();
-    await _loadBookmarks();
-
-    if (mounted) {
-      setState(() {
-        isLoading = false;
-      });
-    }
+    await _loadBookmarks(showSpinner: false);
   }
 
   Widget _buildFileList(List<File> files, String fileType) {
     return RefreshIndicator(
-      key: _refreshIndicatorKey,
       onRefresh: _refreshFiles,
       color: Colors.black,
       child: Stack(
@@ -1014,6 +521,7 @@ class _BookmarkScreenState extends State<BookmarkScreen>
               : files.isEmpty
                   ? Center(
                       child: SingleChildScrollView(
+                        physics: const AlwaysScrollableScrollPhysics(),
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           crossAxisAlignment: CrossAxisAlignment.center,
@@ -1023,7 +531,7 @@ class _BookmarkScreenState extends State<BookmarkScreen>
                                 const Color(0xff000000),
                                 BlendMode.srcATop,
                               ),
-                              child: Lottie.asset("assets/nodata.json"),
+                              child: Lottie.asset("assets/nodata.json", height: 250.h),
                             ),
                             Text(
                               fileType == "All"
@@ -1040,45 +548,40 @@ class _BookmarkScreenState extends State<BookmarkScreen>
                       ),
                     )
                   : ListView.separated(
+                      physics: const AlwaysScrollableScrollPhysics(),
                       itemCount: files.length,
                       itemBuilder: (context, index) {
                         final File file = files[index];
-
-                        // Skip files that no longer exist
-                        if (!file.existsSync()) {
-                          return const SizedBox.shrink();
-                        }
-
                         final String fileName = file.path.split('/').last;
                         final String iconPath = getIconForFile(file.path);
-                        final DateTime lastModified = file.lastModifiedSync();
-                        final String formattedDate =
-                            "${lastModified.day.toString().padLeft(2, '0')}/${lastModified.month.toString().padLeft(2, '0')}/${lastModified.year}";
-
-                        final int fileSizeInBytes = file.lengthSync();
-                        final double fileSizeInKB = fileSizeInBytes / 1024;
-                        final double fileSizeInMB = fileSizeInKB / 1024;
-                        final String formattedSize = fileSizeInMB >= 1
-                            ? '${fileSizeInMB.toStringAsFixed(2)} MB'
-                            : '${fileSizeInKB.toStringAsFixed(2)} KB';
-
                         final bool isBookmarked =
                             bookmarkedFiles.any((f) => f.path == file.path);
 
                         return CupertinoListTile(
-                          leading:
-                              SvgPicture.asset(iconPath, width: 40.w, height: 40.h),
+                          key: ValueKey(file.path),
+                          leading: Image.asset(iconPath,
+                              width: 40.w,
+                              height: 40.h,
+                              cacheWidth: 144,
+                              cacheHeight: 144),
                           title: Text(fileName,
                               style: TextStyle(
                                   fontSize: 16.sp,
                                   fontWeight: FontWeight.w500,
                                   fontFamily: "Inter")),
-                          subtitle: Text("$formattedDate - $formattedSize",
-                              style: TextStyle(
-                                  fontSize: 12.sp,
-                                  color: Colors.grey,
-                                  fontFamily: "Inter")),
+                          subtitle: FileMetaBuilder(
+                            file: file,
+                            builder: (context, stat) => Text(
+                                stat == null
+                                    ? ''
+                                    : "${formatFileDate(stat.modified)} - ${formatFileSize(stat.size)}",
+                                style: TextStyle(
+                                    fontSize: 12.sp,
+                                    color: Colors.grey,
+                                    fontFamily: "Inter")),
+                          ),
                           trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
                               if (isBookmarked)
                                 InkWell(

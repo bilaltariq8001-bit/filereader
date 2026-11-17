@@ -1,30 +1,33 @@
 import 'dart:io';
-import 'package:documentreader/home/homescreen.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 // import 'package:google_mobile_ads/google_mobile_ads.dart';
-import '../adhelper/adhelper.dart';
-import '../bookmark/bookmark.dart';
-import '../constant/color.dart';
 import '../constant/constant.dart';
+import '../services/bookmark_service.dart';
+import '../widget/file_meta.dart';
 
 class SearchScreen extends StatefulWidget {
-  final List<File> files;
+  /// Returns the current list to search. It is read again whenever
+  /// [changes] fires, so renames, deletes and rescans show up here.
+  final List<File> Function() files;
+  final Listenable? changes;
   final String fileType;
   final String name;
   final Function(File) onShowBottomSheet;
   final Function(String) onOpenFile;
-  final Function(File) toggleBookmark;
+  final Future<void> Function(File) toggleBookmark;
 
-  SearchScreen({required this.files, required this.fileType,required this.name,    required this.onShowBottomSheet,
+  SearchScreen({required this.files, this.changes, required this.fileType,required this.name,    required this.onShowBottomSheet,
     required this.onOpenFile,required this.toggleBookmark, });
 
   @override
   _SearchScreenState createState() => _SearchScreenState();
 }
+
+// ignore_for_file: library_private_types_in_public_api
 
 class _SearchScreenState extends State<SearchScreen> {
   TextEditingController _searchController = TextEditingController();
@@ -71,15 +74,28 @@ class _SearchScreenState extends State<SearchScreen> {
     //   });
     // });
     _loadBannerAd();
-    _filteredFiles = widget.files; // Initially show all files
+    _filteredFiles = widget.files(); // Initially show all files
+    widget.changes?.addListener(_onFilesChanged);
+  }
+
+  void _onFilesChanged() {
+    if (mounted) _filterFiles(_searchController.text);
+  }
+
+  @override
+  void dispose() {
+    widget.changes?.removeListener(_onFilesChanged);
+    _searchController.dispose();
+    super.dispose();
   }
 
   void _filterFiles(String query) {
     setState(() {
+      final List<File> files = widget.files();
       if (query.isEmpty) {
-        _filteredFiles = widget.files;
+        _filteredFiles = files;
       } else {
-        _filteredFiles = widget.files
+        _filteredFiles = files
             .where((file) => file.path.split('/').last.toLowerCase().contains(query.toLowerCase()))
             .toList();
       }
@@ -106,11 +122,10 @@ class _SearchScreenState extends State<SearchScreen> {
       backgroundColor: Colors.white,
       appBar: AppBar(
         titleSpacing: 0,
-        leading: IconButton(onPressed: (){
-          widget.name == "HomeScreen"
-              ? Get.to(HomeScreen())
-              : Get.to(BookmarkScreen());
-        }, icon: Icon(Icons.arrow_back_ios_new,color: Colors.black,)),
+        // Return to the screen that opened search instead of pushing a new
+        // copy of it (which re-scanned storage and lost the bottom bar).
+        leading: IconButton(onPressed: () => Get.back(),
+            icon: Icon(Icons.arrow_back_ios_new,color: Colors.black,)),
         automaticallyImplyLeading: false,
         title: Padding(
           padding:  EdgeInsets.only(right: 8.w),
@@ -154,29 +169,27 @@ class _SearchScreenState extends State<SearchScreen> {
           String fileName = file.path.split('/').last;
           String iconPath = getIconForFile(file.path);
 
-          // Get last modified time
-          DateTime lastModified = file.lastModifiedSync();
-          String formattedDate = "${lastModified.day}/${lastModified.month}/${lastModified.year}";
-
-          // Get file size
-          int fileSizeInBytes = file.lengthSync();
-          double fileSizeInKB = fileSizeInBytes / 1024;
-          double fileSizeInMB = fileSizeInKB / 1024;
-          String formattedSize = fileSizeInMB >= 1
-              ? '${fileSizeInMB.toStringAsFixed(2)} MB'
-              : '${fileSizeInKB.toStringAsFixed(2)} KB';
-
-          bool isBookmarked = bookmarkedFiles.any((f) => f.path == file.path);
+          bool isBookmarked = BookmarkService().isBookmarked(file);
 
           return CupertinoListTile(
+            key: ValueKey(file.path),
             leading: SvgPicture.asset(iconPath, width: 40, height: 40),
             title: Text(fileName, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
-            subtitle: Text("$formattedDate - $formattedSize", style: TextStyle(fontSize: 12, color: Colors.grey)),
+            subtitle: FileMetaBuilder(
+              file: file,
+              builder: (context, stat) => Text(
+                  stat == null
+                      ? ''
+                      : "${formatFileDate(stat.modified, pad: false)} - ${formatFileSize(stat.size)}",
+                  style: TextStyle(fontSize: 12, color: Colors.grey)),
+            ),
             trailing: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 isBookmarked ?   InkWell(
-                  onTap: (){
-                    widget.toggleBookmark(file);
+                  onTap: () async {
+                    await widget.toggleBookmark(file);
+                    if (mounted) setState(() {});
                   },
                   child: SvgPicture.asset(
                     "assets/bookmark_filled.svg",

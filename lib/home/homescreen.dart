@@ -1,19 +1,13 @@
 import 'dart:io';
 import 'package:documentreader/bookmark/bookmark.dart';
-import 'package:documentreader/constant/color.dart';
 import 'package:documentreader/setting/settingscreen.dart';
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 import 'package:lottie/lottie.dart';
-import 'package:provider/provider.dart';
-import 'package:pdftron_flutter/pdftron_flutter.dart';
 
-import '../constant/constant.dart';
-import '../controller/fab_controller_pr.dart';
 import '../multiselect/MultiSelectScreen.dart';
 import '../search/searchscreen.dart';
 import '../services/ai_search.dart';
@@ -24,8 +18,6 @@ import '../services/pdf_dervices.dart';
 import '../services/permission_services.dart';
 import '../services/scan_import_services.dart';
 import '../widget/bottom_sheet_action.dart';
-import '../widget/floating_action_button.dart';
-import '../widget/text_helping_dialoags.dart';
 
 class HomeScreen extends StatefulWidget {
   @override
@@ -33,21 +25,28 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   TabController? _tabController;
   bool _openedWithPdfTron = false;
   bool isBannerAdLoaded = false;
   bool isLoading = true;
   String? _currentOpenedFilePath;
-  late FloatingButtonProvider _floatingButtonProvider;
 
   // PDF State
   bool _isPdfOpen = false;
-  int? _currentPageNumber;
-  int? _totalPages;
-  double? _currentZoom;
-  bool _canUndo = false;
-  bool _canRedo = false;
+  final bool _canRedo = false;
+  String? _clipboardTextAtOpen;
+  bool _scanInProgress = false;
+
+  /// Fires whenever the file or bookmark lists change, so screens opened
+  /// from here (search) stay in sync.
+  final ValueNotifier<int> _listsChanged = ValueNotifier<int>(0);
+
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    _listsChanged.value++;
+  }
 
   // Floating AI Button
   bool _showFloatingAiButton = false;
@@ -75,15 +74,21 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initializeServices();
     _initializeTabController();
     _requestPermission();
     _loadBannerAd();
     _setupPdfTronListeners();
-    _floatingButtonProvider = context.read<FloatingButtonProvider>();
+  }
 
-    // Listen to clipboard changes
-    Clipboard.getData(Clipboard.kTextPlain).then(_handleClipboardData);
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // The document viewer is a separate Android activity. When the user comes
+    // back from it, offer AI search for text they copied inside the viewer.
+    if (state == AppLifecycleState.resumed && _isPdfOpen) {
+      Clipboard.getData(Clipboard.kTextPlain).then(_handleClipboardData);
+    }
   }
 
   void _initializeServices() {
@@ -96,9 +101,9 @@ class _HomeScreenState extends State<HomeScreen>
 
   void _initializeTabController() {
     _tabController = TabController(length: 5, vsync: this);
-    _tabController!.addListener(() {
-      if (mounted) setState(() {});
-    });
+    // _getCurrentTabFiles() reads _tabController.index when an action is
+    // tapped, so the whole screen does not need to rebuild on every tab
+    // animation tick.
   }
 
   void _setupPdfTronListeners() {
@@ -107,9 +112,13 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _handleClipboardData(ClipboardData? data) {
-    if (data != null && data.text != null && data.text!.isNotEmpty && _isPdfOpen) {
+    if (!mounted) return;
+    final String? text = data?.text?.trim();
+    if (text != null && text.isNotEmpty && _isPdfOpen &&
+        text != _clipboardTextAtOpen) {
+      _clipboardTextAtOpen = text;
       setState(() {
-        _selectedText = data.text!;
+        _selectedText = text;
         _showFloatingAiButton = true;
       });
 
@@ -130,7 +139,9 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _tabController?.dispose();
+    _listsChanged.dispose();
     super.dispose();
   }
 
@@ -144,6 +155,11 @@ class _HomeScreenState extends State<HomeScreen>
 
     if (hasPermission) {
       await _loadFilesAndBookmarks();
+    } else if (mounted) {
+      // Without access there is nothing to load: show the empty state (pull
+      // to refresh asks again) instead of an endless spinner.
+      setState(() => isLoading = false);
+      await _loadBookmarks();
     }
   }
 
@@ -159,17 +175,7 @@ class _HomeScreenState extends State<HomeScreen>
   // ============================================
   // FILE LOADING
   // ============================================
-  void _setFilesToState(List<File> files) {
-    setState(() {
-      allFiles = files;
-      pdfFiles = files.where((f) => f.path.toLowerCase().endsWith('.pdf')).toList();
-      wordFiles = files.where((f) => f.path.endsWith('.doc') || f.path.endsWith('.docx')).toList();
-      pptFiles = files.where((f) => f.path.endsWith('.ppt') || f.path.endsWith('.pptx')).toList();
-      excelFiles = files.where((f) => f.path.endsWith('.xls') || f.path.endsWith('.xlsx')).toList();
-    });
-  }
-
-  void _updateStateWithFileData(dynamic fileData) {
+  void _applyFileData(FileLoadResult fileData) {
     setState(() {
       allFiles = fileData.allFiles;
       pdfFiles = fileData.pdfFiles;
@@ -179,32 +185,41 @@ class _HomeScreenState extends State<HomeScreen>
     });
   }
 
-  Future<void> _refreshFilesInBackground() async {
+  /// Full storage scan (runs in a background isolate). Only one scan runs at
+  /// a time; pull-to-refresh and the startup refresh share it.
+  Future<void> _scanStorage() async {
+    if (_scanInProgress) return;
+    _scanInProgress = true;
     try {
-      final fileData = await _fileService.loadAllFiles();
+      final FileLoadResult fileData = await _fileService.loadAllFiles();
       if (!mounted) return;
-      _updateStateWithFileData(fileData);
+      _applyFileData(fileData);
       await _fileService.cacheFiles(fileData.allFiles);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('File scan error: $e');
+    } finally {
+      _scanInProgress = false;
+    }
   }
 
-  Future<void> loadFiles() async {
+  /// Shows the cached file list immediately when there is one, then
+  /// refreshes it from storage in the background.
+  Future<void> loadFiles({bool forceRescan = false}) async {
     if (!mounted) return;
-    setState(() => isLoading = true);
 
     try {
-      final cachedFiles = await _fileService.getCachedFiles();
-      if (cachedFiles != null && cachedFiles.isNotEmpty) {
-        _setFilesToState(cachedFiles);
-        _refreshFilesInBackground();
-        setState(() => isLoading = false);
-        return;
+      if (!forceRescan) {
+        final cachedFiles = await _fileService.getCachedFiles();
+        if (!mounted) return;
+        if (cachedFiles != null && cachedFiles.isNotEmpty) {
+          _applyFileData(_fileService.buildResult(cachedFiles));
+          setState(() => isLoading = false);
+          _scanStorage();
+          return;
+        }
       }
-
-      final fileData = await _fileService.loadAllFiles();
-      if (!mounted) return;
-      _updateStateWithFileData(fileData);
-      await _fileService.cacheFiles(fileData.allFiles);
+      if (allFiles.isEmpty) setState(() => isLoading = true);
+      await _scanStorage();
     } catch (e) {
       debugPrint('File load error: $e');
     } finally {
@@ -213,7 +228,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _loadBookmarks() async {
-    final bookmarkData = await _bookmarkService.loadBookmarks();
+    final bookmarkData = await _bookmarkService.loadBookmarks(dropMissing: true);
     if (!mounted) return;
 
     setState(() {
@@ -225,8 +240,9 @@ class _HomeScreenState extends State<HomeScreen>
     });
   }
 
-  void _toggleBookmark(File file) async {
+  Future<void> _toggleBookmark(File file) async {
     final result = await _bookmarkService.toggleBookmark(file);
+    if (!mounted) return;
     setState(() {
       bookmarkedFiles = result.bookmarkedFiles;
       bookmarkedPdfFiles = result.bookmarkedPdfFiles;
@@ -235,6 +251,7 @@ class _HomeScreenState extends State<HomeScreen>
       bookmarkedExcelFiles = result.bookmarkedExcelFiles;
     });
 
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         backgroundColor: result.isBookmarked ? Colors.green : Colors.grey,
@@ -254,45 +271,38 @@ class _HomeScreenState extends State<HomeScreen>
   // ============================================
   // ENHANCED PDF OPERATIONS
   // ============================================
-  Future<void> _openWithPdfTron(String path) async {
+  Future<void> _openWithPdfTron(String path,
+      {Future<void> Function()? onLoaded}) async {
     if (_openedWithPdfTron) return;
     _openedWithPdfTron = true;
 
     try {
-      _currentOpenedFilePath = await _pdfService.openDocument(path);
-
+      if (!await File(path).exists()) {
+        _showMessage('This file no longer exists', Colors.red);
+        loadFiles(forceRescan: true);
+        return;
+      }
+      _clipboardTextAtOpen =
+          (await Clipboard.getData(Clipboard.kTextPlain))?.text?.trim();
+      _currentOpenedFilePath =
+          await _pdfService.openDocument(path, onLoaded: onLoaded);
+      if (!mounted) return;
       setState(() {
         _isPdfOpen = true;
       });
-
-      // Load PDF info in background
-      _loadPdfInfo();
-
-      if (mounted) {
-        Future.delayed(const Duration(milliseconds: 500), () {
-          if (mounted) _pdfService.showTextSelectionTip();
-        });
-      }
+    } catch (e) {
+      debugPrint('Error opening document: $e');
+      _showMessage('Could not open this file', Colors.red);
     } finally {
       _openedWithPdfTron = false;
     }
   }
 
-  Future<void> _loadPdfInfo() async {
-    // Get page count
-    _totalPages = await _pdfService.getPageCount();
-
-    // Get current page
-    _currentPageNumber = await _pdfService.getCurrentPage();
-
-    // Get zoom level
-    _currentZoom = await _pdfService.getZoom();
-
-
-    _canUndo = await _pdfService.canUndo() ?? false;
-    _canRedo = await _pdfService.canRedo() ?? false;
-
-    if (mounted) setState(() {});
+  void _showMessage(String message, Color color) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: color),
+    );
   }
 
   Future<void> _enableTextSelectionMode() async {
@@ -304,21 +314,36 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _openAiSearch(String filePath) async {
-    await _aiSearchService.openAiSearch(filePath: filePath);
+    await _aiSearchService.openAiSearch(
+      filePath: filePath,
+      onSearch: _searchInDocument,
+    );
+  }
+
+  /// Opens the document and runs the search once the viewer has loaded it.
+  Future<void> _searchInDocument(String filePath, String query,
+      {bool matchWholeWord = false}) async {
+    await _openWithPdfTron(_pathFromUri(filePath), onLoaded: () async {
+      await _pdfService.startSearch(query, matchWholeWord: matchWholeWord);
+    });
   }
 
   Future<void> _openAiSearchWithSelectedText() async {
     if (_currentOpenedFilePath != null) {
-      await _aiSearchService.openAiSearch(
-        filePath: _currentOpenedFilePath!,
-        initialQuery: _selectedText,
-      );
       setState(() {
         _showFloatingAiButton = false;
       });
+      await _aiSearchService.openAiSearch(
+        filePath: _currentOpenedFilePath!,
+        initialQuery: _selectedText,
+        onSearch: _searchInDocument,
+      );
     }
   }
-/// helper
+  String _pathFromUri(String path) =>
+      path.startsWith('file://') ? path.substring(7) : path;
+
+  /// helper
   void _showTextExtractionHelp() {
     showDialog(
       context: context,
@@ -331,7 +356,13 @@ class _HomeScreenState extends State<HomeScreen>
               leading: Icon(Icons.touch_app),
               title: Text("Enable Text Selection"),
               subtitle: Text("Tap the text selection icon first"),
-              onTap: _enableTextSelectionMode,
+              onTap: () {
+                Navigator.pop(context);
+                if (_currentOpenedFilePath != null) {
+                  _openWithPdfTron(_pathFromUri(_currentOpenedFilePath!),
+                      onLoaded: _enableTextSelectionMode);
+                }
+              },
             ),
             ListTile(
               leading: Icon(Icons.content_copy),
@@ -342,7 +373,13 @@ class _HomeScreenState extends State<HomeScreen>
               leading: Icon(Icons.search),
               title: Text("Search in Document"),
               subtitle: Text("Find specific text quickly"),
-              onTap: _openSearchInDocument,
+              onTap: () {
+                Navigator.pop(context);
+                if (_currentOpenedFilePath != null) {
+                  _openWithPdfTron(_pathFromUri(_currentOpenedFilePath!),
+                      onLoaded: _openSearchInDocument);
+                }
+              },
             ),
           ],
         ),
@@ -359,11 +396,6 @@ class _HomeScreenState extends State<HomeScreen>
   // ============================================
   // PDF ADVANCED FUNCTIONS
   // ============================================
-
-
-  Future<void> _shareExportedImage(String imagePath) async {
-    // Implement sharing logic
-  }
 
 
 
@@ -385,6 +417,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _updateFileListsAfterRename(File oldFile, File newFile) {
+    if (!mounted) return;
     setState(() {
       _fileService.updateFileInLists(
         oldFile: oldFile,
@@ -397,11 +430,9 @@ class _HomeScreenState extends State<HomeScreen>
       );
     });
 
-    if (bookmarkedFiles.any((f) => f.path == oldFile.path)) {
-      setState(() {
-        _bookmarkService.updateBookmarkedFile(oldFile, newFile);
-      });
-    }
+    // FileService already updated the stored bookmark; refresh our copy.
+    _loadBookmarks();
+    _fileService.cacheFiles(allFiles);
   }
 
   void _confirmDelete(File file) {
@@ -422,9 +453,15 @@ class _HomeScreenState extends State<HomeScreen>
       pptFiles: pptFiles,
       excelFiles: excelFiles,
       bookmarkedFiles: bookmarkedFiles,
+      onRestored: () {
+        if (!mounted) return;
+        loadFiles(forceRescan: true);
+        _loadBookmarks();
+      },
     );
 
-    if (result.success) {
+    if (result.success && mounted) {
+      _fileService.cacheFiles(result.allFiles);
       setState(() {
         allFiles = result.allFiles;
         pdfFiles = result.pdfFiles;
@@ -459,16 +496,10 @@ class _HomeScreenState extends State<HomeScreen>
       onRename: () => _renameFile(file),
       onDelete: () => _confirmDelete(file),
       onSelectText: () {
-        _openWithPdfTron(file.path);
-        Future.delayed(const Duration(milliseconds: 800), () {
-          _enableTextSelectionMode();
-        });
+        _openWithPdfTron(file.path, onLoaded: _enableTextSelectionMode);
       },
       onSearch: () {
-        _openWithPdfTron(file.path);
-        Future.delayed(const Duration(milliseconds: 800), () {
-          _openSearchInDocument();
-        });
+        _openWithPdfTron(file.path, onLoaded: _openSearchInDocument);
       },
       onAiSearch: () => _openAiSearch(file.path),
       onCopyHelp: () => _pdfService.showTextCopyHelp(),
@@ -494,10 +525,11 @@ class _HomeScreenState extends State<HomeScreen>
   // UI HELPERS
   // ============================================
   Future<bool> _exitDialog() async {
-    setState(() {
-      _isPdfOpen = false;
-      _showFloatingAiButton = false;
-    });
+    if (_showFloatingAiButton) {
+      // Back first dismisses the AI search shortcut.
+      setState(() => _showFloatingAiButton = false);
+      return false;
+    }
 
     return await showDialog(
       context: context,
@@ -552,13 +584,28 @@ class _HomeScreenState extends State<HomeScreen>
 
   Future<void> _refreshFiles() async {
     if (!mounted) return;
-    setState(() => isLoading = true);
-    await _requestPermission();
-    if (mounted) setState(() => isLoading = false);
+    final bool hasPermission = await _permissionService.requestStoragePermission(
+      onPermissionDenied: _showPermissionDeniedDialog,
+    );
+    if (!hasPermission) return;
+    await loadFiles(forceRescan: true);
+    await _loadBookmarks();
   }
 
-  List<File> _getCurrentTabFiles() {
-    switch (_tabController?.index) {
+  /// Search, bookmarks and multi-select can rename, delete or (un)bookmark
+  /// files, so re-sync when the user comes back from them.
+  Future<void> _afterReturn() async {
+    if (!mounted) return;
+    await _loadBookmarks();
+    final cached = await _fileService.getCachedFiles();
+    if (!mounted || cached == null) return;
+    _applyFileData(_fileService.buildResult(cached));
+  }
+
+  List<File> _getCurrentTabFiles() => _filesForTab(_tabController?.index ?? 0);
+
+  List<File> _filesForTab(int index) {
+    switch (index) {
       case 0: return allFiles;
       case 1: return pdfFiles;
       case 2: return wordFiles;
@@ -669,14 +716,20 @@ class _HomeScreenState extends State<HomeScreen>
         children: [
           const Icon(Icons.picture_as_pdf, color: Color(0xffDE2429)),
           const SizedBox(width: 5),
-          Text(
-            "PDF Reader",
-            style: TextStyle(
-              color: Colors.black,
-              fontFamily: "Inter",
-              fontSize: isTablet ? 24 : 20,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.5,
+          // Flexible: on narrow phones or with large system font sizes the
+          // title overflowed into the action icons.
+          Flexible(
+            child: Text(
+              "PDF Reader",
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Colors.black,
+                fontFamily: "Inter",
+                fontSize: isTablet ? 24 : 20,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.5,
+              ),
             ),
           ),
         ],
@@ -684,15 +737,18 @@ class _HomeScreenState extends State<HomeScreen>
       actions: [
         _buildActionButton(
           iconPath: "assets/search.svg",
-          onTap: () {
-            Get.to(() => SearchScreen(
-              files: _getCurrentTabFiles(),
+          onTap: () async {
+            final int tab = _tabController?.index ?? 0;
+            await Get.to(() => SearchScreen(
+              files: () => _filesForTab(tab),
+              changes: _listsChanged,
               fileType: _getCurrentFileType(),
               name: "HomeScreen",
               onShowBottomSheet: showBottomSheet,
               onOpenFile: _openWithPdfTron,
               toggleBookmark: _toggleBookmark,
             ));
+            _afterReturn();
           },
           isTablet: isTablet,
           width: width,
@@ -700,19 +756,23 @@ class _HomeScreenState extends State<HomeScreen>
         SizedBox(width: width /20),
         _buildActionButton(
           iconPath: "assets/bookmark.svg",
-          onTap: () => Get.to(() => BookmarkScreen()),
+          onTap: () async {
+            await Get.to(() => const BookmarkScreen());
+            _afterReturn();
+          },
           isTablet: isTablet,
           width: width,
         ),
         SizedBox(width: width / 50),
         _buildActionButton(
           iconPath: "assets/select.svg",
-          onTap: () {
-            Get.to(() => MultiSelectScreen(
-              files: _getCurrentTabFiles(),
+          onTap: () async {
+            await Get.to(() => MultiSelectScreen(
+              files: List<File>.from(_getCurrentTabFiles()),
               fileType: _getCurrentFileType(),
               name: "HomeScreen",
             ));
+            _afterReturn();
           },
           isTablet: isTablet,
           width: width,
@@ -808,9 +868,11 @@ class _HomeScreenState extends State<HomeScreen>
           : files.isEmpty
           ? _buildEmptyState(fileType)
           : ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
         itemCount: files.length,
         itemBuilder: (context, index) {
           return FileListItem(
+            key: ValueKey(files[index].path),
             file: files[index],
             isBookmarked: bookmarkedFiles.any(
                   (f) => f.path == files[index].path,
@@ -831,6 +893,7 @@ class _HomeScreenState extends State<HomeScreen>
   Widget _buildEmptyState(String fileType) {
     return Center(
       child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.center,

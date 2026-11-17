@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:pdftron_flutter/pdftron_flutter.dart';
@@ -13,12 +12,15 @@ class AiSearchService {
   Future<void> openAiSearch({
     required String filePath,
     String? initialQuery,
+    required AiSearchCallback onSearch,
   }) async {
-    showDialog(
+    if (!context.mounted) return;
+    await showDialog(
       context: context,
       builder: (context) => AiSearchDialog(
         filePath: filePath,
         initialQuery: initialQuery,
+        onSearch: onSearch,
       ),
     );
   }
@@ -81,15 +83,21 @@ class SearchResult {
   });
 }
 
+/// Runs a search for [query] inside the document at [filePath].
+typedef AiSearchCallback = Future<void> Function(String filePath, String query,
+    {bool matchWholeWord});
+
 /// AI Search Dialog Widget
 class AiSearchDialog extends StatefulWidget {
   final String filePath;
   final String? initialQuery;
+  final AiSearchCallback onSearch;
 
   const AiSearchDialog({
     Key? key,
     required this.filePath,
     this.initialQuery,
+    required this.onSearch,
   }) : super(key: key);
 
   @override
@@ -116,22 +124,22 @@ class _AiSearchDialogState extends State<AiSearchDialog> {
     super.dispose();
   }
 
-  void _performSearch() async {
-    if (_searchController.text.isEmpty) return;
+  void _performSearch([String? query]) async {
+    final String text = (query ?? _searchController.text).trim();
+    if (text.isEmpty || _isSearching) return;
 
     setState(() => _isSearching = true);
 
+    // The search runs in the document viewer, so close the dialog first and
+    // never touch this State again afterwards.
+    final AiSearchCallback onSearch = widget.onSearch;
+    final String filePath = widget.filePath;
+    final bool exact = _searchMode == SearchMode.exact;
+    Navigator.pop(context);
     try {
-      // Close dialog and open PDFTron search
-      Navigator.pop(context);
-      await PdftronFlutter.openSearch();
-
-      // Future enhancement: Send query to AI service
-      // and display intelligent results
+      await onSearch(filePath, text, matchWholeWord: exact);
     } catch (e) {
-      print('Search error: $e');
-    } finally {
-      setState(() => _isSearching = false);
+      debugPrint('Search error: $e');
     }
   }
 
@@ -266,6 +274,7 @@ class _AiSearchDialogState extends State<AiSearchDialog> {
               controller: _searchController,
               onChanged: _updateSuggestions,
               onSubmitted: (_) => _performSearch(),
+              textInputAction: TextInputAction.search,
               autofocus: true,
               style: TextStyle(
                 fontSize: 16.sp,
@@ -321,8 +330,9 @@ class _AiSearchDialogState extends State<AiSearchDialog> {
                   itemBuilder: (context, index) {
                     return InkWell(
                       onTap: () {
-                        _searchController.text = _suggestions[index];
-                        _performSearch();
+                        // Suggestions are phrasings of the typed query; the
+                        // document search itself looks for the query.
+                        _performSearch(_searchController.text);
                       },
                       child: Container(
                         padding: EdgeInsets.symmetric(
@@ -390,7 +400,7 @@ class _AiSearchDialogState extends State<AiSearchDialog> {
                 Expanded(
                   flex: 2,
                   child: ElevatedButton.icon(
-                    onPressed: _isSearching ? null : _performSearch,
+                    onPressed: _isSearching ? null : () => _performSearch(),
                     icon: _isSearching
                         ? SizedBox(
                       width: 16.w,

@@ -1,30 +1,36 @@
-import 'package:documentreader/search/searchscreen.dart';
 import 'package:documentreader/setting/settingscreen.dart';
 import 'package:documentreader/tool/tool_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'controller/bottom_nav_bar_controllwe.dart';
-import 'documents/scanner_ui.dart';
 import 'home/homescreen.dart';
 
 
+// ignore: camel_case_types
 class bottom_nav extends StatelessWidget {
   const bottom_nav({super.key});
+
+  // Created once. Rebuilding this list on every tab change used to dispose
+  // HomeScreen, so coming back to Home re-requested permissions and
+  // re-scanned the whole storage each time.
+  static final List<Widget> _screens = [
+    HomeScreen(),
+    const ToolScreen(),
+    //DocumentScannerPage()
+    const SettingScreen(),
+  ];
 
   @override
   Widget build(BuildContext context) {
     final navProvider = Provider.of<NavigationProvider>(context);
 
-    final List<Widget> screens = [
-      HomeScreen(),
-       ToolScreen(),
-      //DocumentScannerPage()
-      const SettingScreen(),
-    ];
-
     return Scaffold(
-      body: screens[navProvider.currentIndex],
+      // IndexedStack keeps each tab's state (scroll position, loaded files).
+      body: IndexedStack(
+        index: navProvider.currentIndex,
+        children: _screens,
+      ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: navProvider.currentIndex,
         onTap: navProvider.changeIndex,

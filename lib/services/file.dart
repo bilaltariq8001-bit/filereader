@@ -2,8 +2,8 @@ import 'dart:io';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import '../../constant/common_method.dart';
+import '../widget/file_meta.dart';
 
 class FileListItem extends StatefulWidget {
   final File file;
@@ -37,13 +37,21 @@ class _FileListItemState extends State<FileListItem> {
     final file = widget.file;
     final fileName = file.path.split('/').last;
     final iconPath = getIconForFile(file.path);
-    final lastModified = file.lastModifiedSync();
-    final formattedDate =
-        "${lastModified.day.toString().padLeft(2, '0')}/"
-        "${lastModified.month.toString().padLeft(2, '0')}/"
-        "${lastModified.year}";
-    final formattedSize = _getFormattedFileSize();
-    final isRecent = DateTime.now().difference(lastModified).inDays <= 2;
+    return FileMetaBuilder(
+      file: file,
+      builder: (context, stat) =>
+          _buildItem(context, file, fileName, iconPath, stat),
+    );
+  }
+
+  Widget _buildItem(BuildContext context, File file, String fileName,
+      String iconPath, FileStat? stat) {
+    final DateTime? lastModified = stat?.modified;
+    final String formattedDate =
+        lastModified == null ? '' : formatFileDate(lastModified);
+    final String formattedSize = stat == null ? '' : formatFileSize(stat.size);
+    final bool isRecent = lastModified != null &&
+        DateTime.now().difference(lastModified).inDays <= 2;
 
     return AnimatedScale(
       scale: _scale,
@@ -71,7 +79,8 @@ class _FileListItemState extends State<FileListItem> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               /// 📄 File Icon
-              Image.asset(iconPath, width: 48.w, height: 48.h),
+              Image.asset(iconPath,
+                  width: 48.w, height: 48.h, cacheWidth: 144, cacheHeight: 144),
 
               SizedBox(width: 12.w),
 
@@ -115,7 +124,7 @@ class _FileListItemState extends State<FileListItem> {
 
                     /// Subtitle
                     Text(
-                      "$formattedDate • $formattedSize",
+                      stat == null ? '' : "$formattedDate • $formattedSize",
                       style: TextStyle(
                         fontSize: 12.sp,
                         color: Colors.grey,
@@ -126,7 +135,7 @@ class _FileListItemState extends State<FileListItem> {
                     SizedBox(height: 6.h),
 
                     /// File size progress indicator
-                    _buildSizeIndicator(file.lengthSync()),
+                    _buildSizeIndicator(stat?.size ?? 0),
                   ],
                 ),
               ),
@@ -167,6 +176,7 @@ class _FileListItemState extends State<FileListItem> {
 
   /// 🎨 Background color by file type
   Color _getBgColor(String path) {
+    path = path.toLowerCase();
     if (path.endsWith('.pdf')) return Colors.red.withOpacity(0.08);
     if (path.endsWith('.doc') || path.endsWith('.docx')) {
       return Colors.blue.withOpacity(0.08);
@@ -194,16 +204,5 @@ class _FileListItemState extends State<FileListItem> {
         valueColor: const AlwaysStoppedAnimation(Colors.indigoAccent),
       ),
     );
-  }
-
-  /// 📦 Format file size
-  String _getFormattedFileSize() {
-    final int bytes = widget.file.lengthSync();
-    final kb = bytes / 1024;
-    final mb = kb / 1024;
-
-    return mb >= 1
-        ? '${mb.toStringAsFixed(2)} MB'
-        : '${kb.toStringAsFixed(2)} KB';
   }
 }

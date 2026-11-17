@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:xml/xml.dart';
@@ -13,7 +14,9 @@ class WordService {
         orElse: () => throw Exception('document.xml not found'),
       );
 
-      final xmlContent = String.fromCharCodes(documentFile.content as List<int>);
+      // document.xml is UTF-8; fromCharCodes garbled every non-ASCII letter.
+      final xmlContent = utf8.decode(documentFile.content as List<int>,
+          allowMalformed: true);
       final document = XmlDocument.parse(xmlContent);
       final paragraphs = <String>[];
 
@@ -64,19 +67,27 @@ class WordService {
   }
 
   /// Create VALID DOCX from text
-  static Future<Uint8List> createDocxFromText(String text) async {
+  static Future<Uint8List> createDocxFromText(String text) =>
+      createDocxFromPages([text]);
+
+  /// Creates a DOCX with the paragraphs of each entry of [pages], separated
+  /// by page breaks.
+  static Future<Uint8List> createDocxFromPages(List<String> pages) async {
     try {
       final archive = Archive();
 
       void add(String path, String content) {
-        archive.addFile(ArchiveFile(path, content.length, content.codeUnits));
+        // Zip entries must hold UTF-8 bytes; codeUnits are UTF-16 and broke
+        // any non-ASCII text (and the declared length).
+        final List<int> bytes = utf8.encode(content);
+        archive.addFile(ArchiveFile(path, bytes.length, bytes));
       }
 
       add('[Content_Types].xml', _contentTypes());
       add('_rels/.rels', _rels());
       add('docProps/core.xml', _coreXml());
       add('docProps/app.xml', _appXml());
-      add('word/document.xml', _documentXml(text));
+      add('word/document.xml', _documentXml(pages));
       add('word/styles.xml', _stylesXml());
       add('word/_rels/document.xml.rels', _documentRels());
 
@@ -127,17 +138,19 @@ class WordService {
   <Application>Flutter</Application>
 </Properties>''';
 
-  static String _documentXml(String text) {
-    final escaped = _escapeXml(text);
-
-    final paragraphs = escaped.split('\n').map((line) {
-      return '''
+  static String _documentXml(List<String> pages) {
+    const String pageBreak = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+    final paragraphs = pages.map((page) {
+      final escaped = _escapeXml(page);
+      return escaped.split('\n').map((line) {
+        return '''
 <w:p>
   <w:r>
     <w:t xml:space="preserve">${line.isEmpty ? ' ' : line}</w:t>
   </w:r>
 </w:p>''';
-    }).join();
+      }).join();
+    }).join(pageBreak);
 
     return '''<?xml version="1.0" encoding="UTF-8"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
@@ -150,6 +163,11 @@ class WordService {
 
   static String _escapeXml(String text) {
     return text
+        // Control characters (common in text extracted from PDFs) are not
+        // allowed in XML 1.0 and make Word reject the whole file.
+        .replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F]'), '')
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n')
         .replaceAll('&', '&amp;')
         .replaceAll('<', '&lt;')
         .replaceAll('>', '&gt;')

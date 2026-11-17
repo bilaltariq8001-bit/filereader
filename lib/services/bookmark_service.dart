@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../constant/constant.dart';
 
@@ -18,144 +19,138 @@ class BookmarkData {
   });
 }
 
-class BookmarkToggleResult {
+class BookmarkToggleResult extends BookmarkData {
   final bool isBookmarked;
-  final List<File> bookmarkedFiles;
-  final List<File> bookmarkedPdfFiles;
-  final List<File> bookmarkedWordFiles;
-  final List<File> bookmarkedPptFiles;
-  final List<File> bookmarkedExcelFiles;
 
   BookmarkToggleResult({
     required this.isBookmarked,
-    required this.bookmarkedFiles,
-    required this.bookmarkedPdfFiles,
-    required this.bookmarkedWordFiles,
-    required this.bookmarkedPptFiles,
-    required this.bookmarkedExcelFiles,
+    required super.bookmarkedFiles,
+    required super.bookmarkedPdfFiles,
+    required super.bookmarkedWordFiles,
+    required super.bookmarkedPptFiles,
+    required super.bookmarkedExcelFiles,
   });
 }
 
+/// Single source of truth for bookmarks, shared by every screen.
+///
+/// Bookmarks are stored as file paths, and every comparison is done by path:
+/// two `File` objects for the same path are not `==` in Dart, which used to
+/// make toggling add duplicates instead of removing the bookmark.
 class BookmarkService {
-  List<File> _bookmarkedFiles = [];
-  List<File> _bookmarkedPdfFiles = [];
-  List<File> _bookmarkedWordFiles = [];
-  List<File> _bookmarkedPptFiles = [];
-  List<File> _bookmarkedExcelFiles = [];
+  static const String _prefsKey = 'bookmarks';
 
-  /// Load bookmarks from shared preferences
-  Future<BookmarkData> loadBookmarks() async {
+  static final BookmarkService _instance = BookmarkService._internal();
+  factory BookmarkService() => _instance;
+  BookmarkService._internal();
+
+  final List<String> _paths = [];
+  bool _loaded = false;
+
+  List<String> get paths => List.unmodifiable(_paths);
+
+  /// Forget the in-memory copy so the next call reloads from storage.
+  @visibleForTesting
+  void resetForTest() {
+    _paths.clear();
+    _loaded = false;
+  }
+
+  Future<void> _ensureLoaded() async {
+    if (_loaded) return;
     final SharedPreferences prefs = await SharedPreferences.getInstance();
-    final List<String>? paths = prefs.getStringList("bookmarks");
+    final List<String> stored = prefs.getStringList(_prefsKey) ?? [];
+    _paths
+      ..clear()
+      ..addAll(stored.toSet());
+    _loaded = true;
+  }
 
-    _bookmarkedFiles = paths?.map((path) => File(path)).toList() ?? [];
+  Future<void> _save() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_prefsKey, List<String>.from(_paths));
+  }
 
-    _bookmarkedPdfFiles = _bookmarkedFiles
-        .where((file) => file.path.toLowerCase().endsWith(Constants.pdf))
+  BookmarkData _snapshot() {
+    final List<File> all = _paths.map((p) => File(p)).toList();
+    List<File> by(List<String> exts) => all
+        .where((f) => exts.any((e) => f.path.toLowerCase().endsWith(e)))
         .toList();
-
-    _bookmarkedWordFiles = _bookmarkedFiles
-        .where((file) =>
-    file.path.toLowerCase().endsWith(Constants.doc) ||
-        file.path.toLowerCase().endsWith(Constants.docx))
-        .toList();
-
-    _bookmarkedPptFiles = _bookmarkedFiles
-        .where((file) =>
-    file.path.toLowerCase().endsWith(Constants.ppt) ||
-        file.path.toLowerCase().endsWith(Constants.pptx))
-        .toList();
-
-    _bookmarkedExcelFiles = _bookmarkedFiles
-        .where((file) =>
-    file.path.toLowerCase().endsWith(Constants.xlsx) ||
-        file.path.toLowerCase().endsWith(Constants.xls))
-        .toList();
-
     return BookmarkData(
-      bookmarkedFiles: _bookmarkedFiles,
-      bookmarkedPdfFiles: _bookmarkedPdfFiles,
-      bookmarkedWordFiles: _bookmarkedWordFiles,
-      bookmarkedPptFiles: _bookmarkedPptFiles,
-      bookmarkedExcelFiles: _bookmarkedExcelFiles,
+      bookmarkedFiles: all,
+      bookmarkedPdfFiles: by([Constants.pdf]),
+      bookmarkedWordFiles: by([Constants.doc, Constants.docx]),
+      bookmarkedPptFiles: by([Constants.ppt, Constants.pptx]),
+      bookmarkedExcelFiles: by([Constants.xls, Constants.xlsx]),
     );
+  }
+
+  /// Load bookmarks. When [dropMissing] is true, bookmarks whose file no
+  /// longer exists are removed and the cleaned list is saved.
+  Future<BookmarkData> loadBookmarks({bool dropMissing = false}) async {
+    await _ensureLoaded();
+    if (dropMissing) {
+      final List<String> existing = [];
+      for (final String p in _paths) {
+        if (await File(p).exists()) existing.add(p);
+      }
+      if (existing.length != _paths.length) {
+        _paths
+          ..clear()
+          ..addAll(existing);
+        await _save();
+      }
+    }
+    return _snapshot();
   }
 
   /// Toggle bookmark for a file
   Future<BookmarkToggleResult> toggleBookmark(File file) async {
-    final bool wasBookmarked = _bookmarkedFiles.contains(file);
-
+    await _ensureLoaded();
+    final bool wasBookmarked = _paths.contains(file.path);
     if (wasBookmarked) {
-      _removeBookmark(file);
+      _paths.remove(file.path);
     } else {
-      _addBookmark(file);
+      _paths.add(file.path);
     }
-
-    await _saveBookmarks();
-
+    await _save();
+    final BookmarkData d = _snapshot();
     return BookmarkToggleResult(
       isBookmarked: !wasBookmarked,
-      bookmarkedFiles: _bookmarkedFiles,
-      bookmarkedPdfFiles: _bookmarkedPdfFiles,
-      bookmarkedWordFiles: _bookmarkedWordFiles,
-      bookmarkedPptFiles: _bookmarkedPptFiles,
-      bookmarkedExcelFiles: _bookmarkedExcelFiles,
+      bookmarkedFiles: d.bookmarkedFiles,
+      bookmarkedPdfFiles: d.bookmarkedPdfFiles,
+      bookmarkedWordFiles: d.bookmarkedWordFiles,
+      bookmarkedPptFiles: d.bookmarkedPptFiles,
+      bookmarkedExcelFiles: d.bookmarkedExcelFiles,
     );
   }
 
-  /// Add a file to bookmarks
-  void _addBookmark(File file) {
-    _bookmarkedFiles.add(file);
-
-    final String path = file.path.toLowerCase();
-
-    if (path.endsWith(Constants.pdf)) {
-      _bookmarkedPdfFiles.add(file);
-    } else if (path.endsWith(Constants.doc) || path.endsWith(Constants.docx)) {
-      _bookmarkedWordFiles.add(file);
-    } else if (path.endsWith(Constants.ppt) || path.endsWith(Constants.pptx)) {
-      _bookmarkedPptFiles.add(file);
-    } else if (path.endsWith(Constants.xlsx) || path.endsWith(Constants.xls)) {
-      _bookmarkedExcelFiles.add(file);
+  Future<BookmarkData> addBookmark(String path) async {
+    await _ensureLoaded();
+    if (!_paths.contains(path)) {
+      _paths.add(path);
+      await _save();
     }
+    return _snapshot();
   }
 
-  /// Remove a file from bookmarks
-  void _removeBookmark(File file) {
-    _bookmarkedFiles.remove(file);
-    _bookmarkedPdfFiles.remove(file);
-    _bookmarkedWordFiles.remove(file);
-    _bookmarkedPptFiles.remove(file);
-    _bookmarkedExcelFiles.remove(file);
-  }
-
-  /// Save bookmarks to shared preferences
-  Future<void> _saveBookmarks() async {
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
-    final List<String> paths = _bookmarkedFiles.map((file) => file.path).toList();
-    await prefs.setStringList("bookmarks", paths);
+  Future<BookmarkData> removeBookmark(String path) async {
+    await _ensureLoaded();
+    if (_paths.remove(path)) await _save();
+    return _snapshot();
   }
 
   /// Update a bookmarked file after rename
-  void updateBookmarkedFile(File oldFile, File newFile) {
-    void updateFileInList(List<File> list) {
-      final int index = list.indexWhere((f) => f.path == oldFile.path);
-      if (index != -1) {
-        list[index] = newFile;
-      }
+  Future<BookmarkData> updateBookmarkedFile(File oldFile, File newFile) async {
+    await _ensureLoaded();
+    final int index = _paths.indexOf(oldFile.path);
+    if (index != -1) {
+      _paths[index] = newFile.path;
+      await _save();
     }
-
-    updateFileInList(_bookmarkedFiles);
-    updateFileInList(_bookmarkedPdfFiles);
-    updateFileInList(_bookmarkedWordFiles);
-    updateFileInList(_bookmarkedPptFiles);
-    updateFileInList(_bookmarkedExcelFiles);
-
-    _saveBookmarks();
+    return _snapshot();
   }
 
   /// Check if a file is bookmarked
-  bool isBookmarked(File file) {
-    return _bookmarkedFiles.any((f) => f.path == file.path);
-  }
+  bool isBookmarked(File file) => _paths.contains(file.path);
 }

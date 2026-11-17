@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../../constant/common_method.dart';
+import 'file_meta.dart';
 
 class BottomSheetActions {
   static void show({
@@ -22,7 +23,6 @@ class BottomSheetActions {
     final String fileName = file.path.split('/').last;
     final String iconPath = getIconForFile(file.path);
     final bool isPdf = file.path.toLowerCase().endsWith('.pdf');
-    final String formattedSize = _getFormattedFileSize(file);
 
     showModalBottomSheet(
       context: context,
@@ -39,7 +39,7 @@ class BottomSheetActions {
               : MediaQuery.of(context).size.height * 0.25,
           child: Column(
             children: [
-              _buildHeader(context, fileName, iconPath, formattedSize),
+              _buildHeader(context, file, fileName, iconPath),
               Padding(
                 padding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 18.h),
                 child: Column(
@@ -74,9 +74,9 @@ class BottomSheetActions {
 
   static Widget _buildHeader(
       BuildContext context,
+      File file,
       String fileName,
       String iconPath,
-      String formattedSize,
       ) {
     return AppBar(
       automaticallyImplyLeading: false,
@@ -90,7 +90,8 @@ class BottomSheetActions {
       ],
       title: Row(
         children: [
-          SvgPicture.asset(iconPath, height: 40.h, width: 40.w),
+          Image.asset(iconPath,
+              height: 40.h, width: 40.w, cacheWidth: 144, cacheHeight: 144),
           SizedBox(width: 10.w),
           Expanded(
             child: Column(
@@ -108,14 +109,17 @@ class BottomSheetActions {
                   maxLines: 1,
                 ),
                 SizedBox(height: 2.h),
-                Text(
-                  formattedSize,
+                FileMetaBuilder(
+                  file: file,
+                  builder: (context, stat) => Text(
+                  stat == null ? '' : formatFileSize(stat.size),
                   style: TextStyle(
                     fontWeight: FontWeight.w400,
                     fontFamily: "Inter",
                     fontSize: 12.sp,
                     color: Colors.grey,
                   ),
+                ),
                 ),
               ],
             ),
@@ -251,15 +255,5 @@ class BottomSheetActions {
         ],
       ),
     );
-  }
-
-  static String _getFormattedFileSize(File file) {
-    final int fileSizeInBytes = file.lengthSync();
-    final double fileSizeInKB = fileSizeInBytes / 1024;
-    final double fileSizeInMB = fileSizeInKB / 1024;
-
-    return fileSizeInMB >= 1
-        ? '${fileSizeInMB.toStringAsFixed(2)} MB'
-        : '${fileSizeInKB.toStringAsFixed(2)} KB';
   }
 }

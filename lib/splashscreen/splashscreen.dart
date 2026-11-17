@@ -2,11 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 // import 'package:google_mobile_ads/google_mobile_ads.dart';
-import 'package:permission_handler/permission_handler.dart';
 
-import '../adhelper/adhelper.dart';
-import '../constant/constant.dart';
-import '../home/homescreen.dart';
 import '../nav_bar.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -30,6 +26,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     // });
 
     Future.delayed(Duration(seconds: 3), () {
+      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         PageRouteBuilder(

@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:flutter/cupertino.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
@@ -34,9 +33,37 @@ class PdfService {
       throw Exception('Failed to extract text from PDF: $e');
     }
   }
-  static Future<Uint8List> createPdfFromText(String text) async {
+  /// Text of each page of a PDF, in order.
+  static List<String> extractPagesFromPdfBytes(Uint8List bytes) {
+    final document = sf.PdfDocument(inputBytes: bytes);
     try {
-      final pdf = pw.Document();
+      final extractor = sf.PdfTextExtractor(document);
+      // extractText() puts many PDF generators' words on separate lines;
+      // extractTextLines() groups words that share a line, which keeps the
+      // paragraphs readable in the Word file.
+      return List<String>.generate(document.pages.count, (i) {
+        final lines =
+            extractor.extractTextLines(startPageIndex: i, endPageIndex: i);
+        return lines.map((l) => l.text.trim()).join('\n');
+      });
+    } finally {
+      document.dispose();
+    }
+  }
+
+  /// [fontData] is a TrueType font. The built-in PDF fonts only cover
+  /// Latin-1, so other characters came out missing.
+  static Future<Uint8List> createPdfFromText(String text,
+      {ByteData? fontData}) async {
+    try {
+      final pdf = fontData == null
+          ? pw.Document()
+          : pw.Document(
+              theme: pw.ThemeData.withFont(
+                base: pw.Font.ttf(fontData),
+                bold: pw.Font.ttf(fontData),
+              ),
+            );
 
       final lines = text.split('\n');
 

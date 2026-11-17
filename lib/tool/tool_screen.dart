@@ -49,12 +49,16 @@ class _ToolScreenState extends State<ToolScreen> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text(
-                          "Recent Conversions",
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            fontFamily: "Inter",
+                        const Flexible(
+                          child: Text(
+                            "Recent Conversions",
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              fontFamily: "Inter",
+                            ),
                           ),
                         ),
                         TextButton(
@@ -222,9 +226,13 @@ class _ToolScreenState extends State<ToolScreen> {
 
           onSelected: (value) async {
             if (value == 'open') {
-              OpenFile.open(item.outputPath);
+              _openOutput(context, item.outputPath);
             } else if (value == 'share') {
-              Share.shareXFiles([XFile(item.outputPath)]);
+              if (!await File(item.outputPath).exists()) {
+                if (context.mounted) _showMissing(context);
+                return;
+              }
+              await Share.shareXFiles([XFile(item.outputPath)]);
             }
           },
           itemBuilder: (context) => [
@@ -232,7 +240,7 @@ class _ToolScreenState extends State<ToolScreen> {
             const PopupMenuItem(value: 'share', child: Text("Share")),
           ],
         ),
-        onTap: () => OpenFile.open(item.outputPath),
+        onTap: () => _openOutput(context, item.outputPath),
       ),
     );
   }
@@ -254,7 +262,7 @@ class _ToolScreenState extends State<ToolScreen> {
               const CircularProgressIndicator(),
               SizedBox(height: 20.h),
               Text(
-                status.message ?? "Converting...",
+                status.message.isEmpty ? "Converting..." : status.message,
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 16.sp,
@@ -262,10 +270,8 @@ class _ToolScreenState extends State<ToolScreen> {
                   fontFamily: "Inter",
                 ),
               ),
-              if (status.progress != null) ...[
-                SizedBox(height: 12.h),
-                LinearProgressIndicator(value: status.progress),
-              ],
+              SizedBox(height: 12.h),
+              LinearProgressIndicator(value: status.progress),
             ],
           ),
         ),
@@ -274,8 +280,35 @@ class _ToolScreenState extends State<ToolScreen> {
   }
 
   Future<void> _handleConversion(BuildContext context, Future<dynamic> Function() conversion) async {
+    final provider = context.read<DocumentConverterProvider>();
+    // Ignore taps while a conversion is already running.
+    if (provider.isConverting) return;
     try {
       final result = await conversion();
+      if (!mounted) return;
+      // Use this screen's context: the one passed in may belong to a dialog
+      // that has already closed.
+      final BuildContext screenContext = this.context;
+      if (result == null) {
+        // The provider reports failures through its status; show them
+        // instead of silently doing nothing.
+        final status = provider.status;
+        if (status.isError) {
+          final String detail = (status.errorMessage ?? '')
+              .replaceAll('Exception: ', '')
+              .trim();
+          ScaffoldMessenger.of(screenContext).showSnackBar(
+            SnackBar(
+              backgroundColor: Colors.red,
+              content: Text(detail.isEmpty
+                  ? status.message
+                  : '${status.message}: $detail'),
+            ),
+          );
+          provider.resetStatus();
+        }
+        return;
+      }
       if (result != null) {
         File? file;
         if (result is File) {
@@ -285,11 +318,12 @@ class _ToolScreenState extends State<ToolScreen> {
         }
         
         if (file != null) {
-          _showSuccessSheet(context, file);
+          _showSuccessSheet(screenContext, file);
         }
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      if (!mounted) return;
+      ScaffoldMessenger.of(this.context).showSnackBar(
         SnackBar(content: Text("Error: ${e.toString()}")),
       );
     }
@@ -332,7 +366,7 @@ class _ToolScreenState extends State<ToolScreen> {
             ElevatedButton.icon(
               onPressed: () {
                 Navigator.pop(context);
-                OpenFile.open(file.path);
+                _openOutput(this.context, file.path);
               },
               icon: const Icon(Icons.open_in_new),
               label: const Text("Open File"),
@@ -353,6 +387,7 @@ class _ToolScreenState extends State<ToolScreen> {
 
   void _showTextToWordDialog(BuildContext context, DocumentConverterProvider provider) {
     final textController = TextEditingController();
+    final BuildContext screenContext = context;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -372,8 +407,15 @@ class _ToolScreenState extends State<ToolScreen> {
           ),
           ElevatedButton(
             onPressed: () {
+              final String text = textController.text;
+              if (text.trim().isEmpty) {
+                ScaffoldMessenger.of(screenContext).showSnackBar(
+                  const SnackBar(content: Text("Please enter some text first")),
+                );
+                return;
+              }
               Navigator.pop(context);
-              _handleConversion(context, () => provider.convertTextToWord(textController.text));
+              _handleConversion(screenContext, () => provider.convertTextToWord(text));
             },
             child: const Text("Convert"),
           ),
@@ -381,6 +423,27 @@ class _ToolScreenState extends State<ToolScreen> {
       ),
     );
   }
+}
+
+Future<void> _openOutput(BuildContext context, String path) async {
+  if (!await File(path).exists()) {
+    if (context.mounted) _showMissing(context);
+    return;
+  }
+  final OpenResult result = await OpenFile.open(path);
+  if (result.type != ResultType.done && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(result.type == ResultType.noAppToOpen
+          ? 'No app installed that can open this file'
+          : 'Could not open file: ${result.message}'),
+    ));
+  }
+}
+
+void _showMissing(BuildContext context) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(content: Text('This file no longer exists')),
+  );
 }
 
 class _ToolItem {
