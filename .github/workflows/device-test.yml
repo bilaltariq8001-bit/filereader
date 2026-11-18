@@ -20,7 +20,7 @@ jobs:
       - run: rm -rf android/.gradle android/build build .dart_tool
       - run: flutter pub get
       - run: flutter build apk --release --target-platform android-x64
-      - run: pip install python-docx python-pptx openpyxl pillow reportlab && python3 .github/scripts/make_samples.py
+      - run: pip install python-docx python-pptx openpyxl pillow reportlab pypdf && python3 .github/scripts/make_samples.py
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -35,9 +35,8 @@ jobs:
           disable-animations: true
           script: |
             adb install -r build/app/outputs/flutter-apk/app-release.apk
-            adb shell mkdir -p /sdcard/Download /sdcard/Documents
-            for f in samples/*; do adb push "$f" /sdcard/Download/; done
-            adb push samples/sample.pdf /sdcard/Documents/report.pdf
-            adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Download/sample.pdf || true
+            adb push samples/. /sdcard/
+            adb shell "find /sdcard/Download/archive -type f -exec touch -t 202501010000 {} +"
+            adb shell ls -R /sdcard/Documents /sdcard/Download | head -60
             adb logcat -c
-            python3 .github/scripts/device_smoke.py
+            python3 .github/scripts/device_smoke.py 2>&1 | tee smoke.log
