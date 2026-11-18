@@ -20,12 +20,17 @@ jobs:
           channel: stable
       - run: rm -rf android/.gradle android/build build .dart_tool
       - run: flutter pub get
-      - run: flutter build apk --release
+      # One APK per CPU type: arm64 fits almost every phone from 2017 on,
+      # armeabi-v7a is for older 32-bit phones.
+      - run: flutter build apk --release --split-per-abi --target-platform android-arm64,android-arm
+      - run: |
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk pdf-reader-arm64.apk
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk pdf-reader-armv7.apk
+          ls -l pdf-reader-*.apk
       - uses: actions/upload-artifact@v4
         with:
           name: pdf-reader-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
-      - run: cp build/app/outputs/flutter-apk/app-release.apk pdf-reader.apk
+          path: pdf-reader-*.apk
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-latest
@@ -33,4 +38,6 @@ jobs:
           prerelease: true
           make_latest: false
           target_commitish: ${{ github.sha }}
-          files: pdf-reader.apk
+          files: |
+            pdf-reader-arm64.apk
+            pdf-reader-armv7.apk

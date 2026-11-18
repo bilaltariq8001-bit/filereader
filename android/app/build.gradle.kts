@@ -30,6 +30,15 @@ android {
         versionName = flutter.versionName
     }
 
+    // Store native libraries compressed in the APK. PDFTron's libPDFNetC.so alone is
+    // ~60 MB uncompressed; compressing roughly halves the download. Android extracts
+    // them once at install, so runtime speed is unchanged.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.
