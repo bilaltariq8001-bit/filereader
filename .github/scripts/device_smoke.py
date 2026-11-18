@@ -199,7 +199,7 @@ for q, name in cases:
 
 # Files that must be found / must stay hidden
 for q, name, should in [("Form", "Form.pdf", True), ("secret", "secret.pdf", False),
-                        ("file_249", "file_249.txt", False), ("file_248", "file_248.xlsx", True)]:
+                        ("file_249", "file_249.txt", False), ("file_248", "file_248.pdf", True)]:
     n, c, _ = launch(8)
     b = search_icon(n)
     if b:

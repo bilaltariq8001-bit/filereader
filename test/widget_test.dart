@@ -244,4 +244,25 @@ void main() {
     expect(pages.length, 2);
     expect(pages[1], contains('B'));
   });
+
+  test('Excel to PDF reads files with absolute part paths (Google Sheets, LibreOffice)', () async {
+    final book = excel_pkg.Excel.createExcel();
+    book['Sheet1'].appendRow([excel_pkg.TextCellValue('Item'), excel_pkg.IntCellValue(42)]);
+    final archive = ZipDecoder().decodeBytes(book.encode()!);
+    final out = Archive();
+    for (final f in archive.files) {
+      if (f.name == 'xl/_rels/workbook.xml.rels') {
+        final xml = utf8.decode(f.content as List<int>)
+            .replaceAll('Target="worksheets/', 'Target="/xl/worksheets/');
+        expect(xml, contains('Target="/xl/worksheets/'));
+        final b = utf8.encode(xml);
+        out.addFile(ArchiveFile(f.name, b.length, b));
+      } else {
+        out.addFile(f);
+      }
+    }
+    final bytes = Uint8List.fromList(ZipEncoder().encode(out)!);
+    final pdf = await excelBytesToPdf(bytes);
+    expect(utf8.decode(pdf.sublist(0, 5), allowMalformed: true), '%PDF-');
+  });
 }

@@ -497,8 +497,40 @@ pw.ImageProvider _pdfImage(Uint8List bytes, img.Decoder decoder) {
   return pw.MemoryImage(img.encodePng(decoded));
 }
 
+/// Many spreadsheet tools (Google Sheets, LibreOffice exports, openpyxl)
+/// write absolute part paths such as `/xl/worksheets/sheet1.xml` in
+/// `workbook.xml.rels`. The excel package only resolves relative paths and
+/// crashes with a null check on those files, so rewrite them first.
+Uint8List normalizeXlsxBytes(Uint8List bytes) {
+  try {
+    final archive = ZipDecoder().decodeBytes(bytes);
+    final rels = archive.findFile('xl/_rels/workbook.xml.rels');
+    if (rels == null) return bytes;
+    final String xml = utf8.decode(rels.content as List<int>);
+    if (!xml.contains('Target="/xl/')) return bytes;
+    final fixed = utf8.encode(xml.replaceAll('Target="/xl/', 'Target="'));
+    final out = Archive();
+    for (final f in archive.files) {
+      if (f.name == rels.name) {
+        out.addFile(ArchiveFile(f.name, fixed.length, fixed));
+      } else {
+        out.addFile(f);
+      }
+    }
+    final encoded = ZipEncoder().encode(out);
+    return encoded == null ? bytes : Uint8List.fromList(encoded);
+  } catch (_) {
+    return bytes;
+  }
+}
+
 Future<Uint8List> excelBytesToPdf(Uint8List bytes) async {
-  final excel = excel_pkg.Excel.decodeBytes(bytes);
+  final excel_pkg.Excel excel;
+  try {
+    excel = excel_pkg.Excel.decodeBytes(normalizeXlsxBytes(bytes));
+  } catch (e) {
+    throw Exception('This Excel file could not be read.');
+  }
   if (excel.tables.isEmpty) throw Exception('Excel file is empty.');
   final sheet = excel.tables[excel.tables.keys.first];
   if (sheet == null || sheet.maxRows == 0 || sheet.maxColumns == 0) {
