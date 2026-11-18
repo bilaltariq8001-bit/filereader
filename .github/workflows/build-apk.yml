@@ -3,6 +3,8 @@ on:
   workflow_dispatch:
   push:
     branches: [fix/stability-and-performance]
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -23,3 +25,12 @@ jobs:
         with:
           name: pdf-reader-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+      - run: cp build/app/outputs/flutter-apk/app-release.apk pdf-reader.apk
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-latest
+          name: PDF Reader test build
+          prerelease: true
+          make_latest: false
+          target_commitish: ${{ github.sha }}
+          files: pdf-reader.apk
