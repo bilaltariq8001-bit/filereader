@@ -35,13 +35,26 @@ void main() {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
+  static Size _designSize(Size screen) {
+    final ok = screen.width.isFinite && screen.height.isFinite &&
+        screen.width > 0 && screen.height > 0;
+    return ok ? screen : const Size(360, 690);
+  }
+
   @override
   Widget build(BuildContext context) {
     return ScreenUtilInit(
       // sizeOf() only depends on the screen size. MediaQuery.of() also
       // depended on the keyboard insets, so the entire app (including
       // GetMaterialApp) rebuilt on every frame of the keyboard animation.
-      designSize: MediaQuery.sizeOf(context),
+      // The design size used to be the live screen size. While the Android
+      // window has no size yet (first frame, returning from the document
+      // viewer, rotation) that is 0x0, and ScreenUtil's 0/0 scale turned
+      // every .sp font size into NaN. NaN font sizes corrupt the engine's
+      // paragraph cache and crash the app natively (SIGSEGV in
+      // ParagraphImpl::layout, flutter/flutter#184554). Fall back to a fixed
+      // size until the real one is known (scale 0 for that frame, never NaN).
+      designSize: _designSize(MediaQuery.sizeOf(context)),
       minTextAdapt: true,
       splitScreenMode: true,
       builder: (_ , child) {
