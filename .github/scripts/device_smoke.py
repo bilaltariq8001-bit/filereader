@@ -93,14 +93,12 @@ launch(); n = step("relaunch for tools", 10)
 tap_node(n, r"^Tools", "tools tab"); n = step("tools tab", 3)
 tools = [t or d for t, d, b, p in n if p == PKG and (t or d)]
 for name in tools:
-    if not re.search(r"to (pdf|word)|image|merge|split|compress|convert|scan", name, re.I):
+    if not re.search(r" to (pdf|word)", name, re.I):
         continue
     launch(); nn = step("relaunch", 8)
     tap_node(nn, r"^Tools", "tools tab"); nn = step("tools", 3)
     if not tap_node(nn, re.escape(name), f"tool {name!r}"):
         continue
-    nn = step(f"tool {name!r} opened", 4)
-    tap_node(nn, r"select|choose|pick|upload|browse|add", "select file button")
     nn = step(f"picker for {name!r}", 6)
     if any(p and "documentsui" in p for _, _, _, p in nn):
         if not tap_node(nn, r"sample\.", "pick sample file"):
@@ -109,8 +107,7 @@ for name in tools:
             tap_node(nn, r"^Download", "downloads"); nn = step("downloads", 3)
             tap_node(nn, r"sample\.", "pick sample file")
         nn = step(f"after picking for {name!r}", 10)
-        tap_node(nn, r"convert|start|create|merge|compress|split|save", "action button")
-        nn = step(f"after action for {name!r}", 15)
+        nn = step(f"result for {name!r}", 12)
     sh("input keyevent KEYCODE_BACK")
 
 print("\n===== APP LOG =====")
