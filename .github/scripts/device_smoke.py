@@ -78,7 +78,11 @@ def step(label, wait=4, quiet=False):
     time.sleep(wait)
     c = crash_log()
     if c:
-        print(f"--- CRASH during {label} ---\n" + c[-4000:])
+        lines = c.splitlines()
+        print(f"--- CRASH during {label} ---\n" + "\n".join(lines[:90]))
+        tomb = sh("ls -t /data/tombstones/ 2>/dev/null | grep -v pb | head -1").strip()
+        if tomb and "F DEBUG" in c:
+            print("--- TOMBSTONE head ---\n" + sh(f"head -120 /data/tombstones/{tomb}"))
     n = dump(label, quiet)
     if any("keeps stopping" in t or "isn't responding" in t for t, _, _, _ in n):
         c = c or "system crash/ANR dialog"
@@ -104,6 +108,7 @@ def app_screen(n):
     return any(p == PKG for _, _, _, p in n)
 
 
+print(adb("root")); time.sleep(3)
 # ---------------------------------------------------------------- permissions
 sh(f"pm revoke {PKG} android.permission.READ_EXTERNAL_STORAGE")
 sh(f"appops set --uid {PKG} MANAGE_EXTERNAL_STORAGE default")
@@ -137,12 +142,13 @@ for i in range(3):
 print("cold start ms:", times)
 n = dump("home (all files)")
 record("cold start under 3 s", all(t and t < 3000 for t in times), str(times))
-for tab in ["PDF", "Word", "PPT", "Excel", "All"]:
-    if not tap_node(n, rf"^{tab}\b", f"{tab} tab"):
-        sh("input swipe 280 115 60 115 300"); n = dump("tabs scrolled", True)
-        if not tap_node(n, rf"^{tab}\b", f"{tab} tab"):
+for idx, tab in [(2, "PDF"), (3, "Word"), (4, "PPT"), (5, "Excel"), (1, "All")]:
+    n, c, _ = launch(8)
+    if not tap_node(n, rf"Tab {idx} of 5", f"{tab} tab"):
+        sh("input swipe 280 115 40 115 300"); n = dump("tabs scrolled", True)
+        if not tap_node(n, rf"Tab {idx} of 5", f"{tab} tab"):
             record(f"{tab} tab lists files", False, "tab not found"); continue
-    n, c = step(f"{tab} tab", 3)
+    n, c = step(f"{tab} tab", 4)
     files = [d.split("\n")[0].split(", ", 1)[-1] for _, d, _, _ in n if re.search(r"\.\w{3,4}\n", d)]
     print(f"{tab} tab shows: {files}")
     record(f"{tab} tab lists files", bool(files) and not c, f"{len(files)} visible")
@@ -161,7 +167,10 @@ def open_by_search(query, expect_name, wait=15):
     if not b:
         record(f"open {expect_name}", False, "search icon not found"); return
     tap_box(b); time.sleep(2)
-    sh("input text " + query.replace(" ", "%s"))
+    n = dump("search screen", True)
+    field = [bb for t, d, bb, p in n if p == PKG and d == "CLICKABLE" and box(bb)[1] < 90 and box(bb)[2] - box(bb)[0] > 150]
+    if field: tap_box(field[0]); time.sleep(1)
+    sh("input text " + query.replace(" ", "%s")); sh("input keyevent KEYCODE_BACK")
     n, c = step(f"search {query!r}", 3)
     if not tap_node(n, re.escape(expect_name), f"result {expect_name}"):
         record(f"open {expect_name}", False, "not in search results"); return
@@ -194,9 +203,14 @@ for q, name, should in [("Form", "Form.pdf", True), ("secret", "secret.pdf", Fal
     n, c, _ = launch(8)
     b = search_icon(n)
     if b:
-        tap_box(b); time.sleep(2); sh("input text " + q)
+        tap_box(b); time.sleep(2)
+        nn = dump("search screen", True)
+        field = [bb for t, d, bb, p in nn if p == PKG and d == "CLICKABLE" and box(bb)[1] < 90 and box(bb)[2] - box(bb)[0] > 150]
+        if field: tap_box(field[0]); time.sleep(1)
+        sh("input text " + q); sh("input keyevent KEYCODE_BACK")
         n, c = step(f"search {q}", 3, quiet=True)
         found = any(name in d for _, d, _, _ in n)
+        print(f"search {q}: {[d.split(chr(10))[0] for _, d, _, p in n if p == PKG and chr(10) in d]}")
         record(f"{name} {'listed' if should else 'not listed'}", found == should)
 
 # ------------------------------------------------------------ converters
@@ -204,28 +218,47 @@ sh("touch /sdcard/.smoke_marker")
 convs = [("Word to PDF", "convert_me.docx"), ("Excel to PDF", "convert_me.xlsx"),
          ("PPT to PDF", "convert_me.pptx"), ("PDF to Word", "convert_me.pdf"),
          ("Images to PDF", "convert_me.jpg"), ("Text to Word", "convert_me.txt")]
+def pick_in_documentsui(n, fname):
+    if tap_node(n, rf"^{re.escape(fname)}$", "pick file"):
+        return True
+    tap_node(n, r"^Search$", "picker search"); time.sleep(2)
+    sh("input text " + fname.rsplit(".", 1)[0]); sh("input keyevent KEYCODE_ENTER")
+    n, c = step("picker search results", 4)
+    return tap_node(n, rf"^{re.escape(fname)}$", "pick file")
+
+
 for tool, fname in convs:
     sh(f"touch /sdcard/Download/{fname}")
     n, c, _ = launch(8)
     tap_node(n, r"^Tools", "tools tab"); n, c = step("tools", 3, quiet=True)
-    if not tap_node(n, re.escape(tool), tool):
+    if not tap_node(n, rf"^{re.escape(tool)}$", tool):
         record(f"convert {tool}", False, "tile missing"); continue
     n, c = step(f"picker for {tool}", 6)
-    if c or not any(p and "documentsui" in p for _, _, _, p in n):
+    pkgs = {p for _, _, _, p in n}
+    if tool == "Text to Word":
+        field = [bb for t, d, bb, p in n if p == PKG and d == "CLICKABLE"]
+        if field: tap_box(field[0]); time.sleep(1)
+        sh("input text Hello%sfrom%sthe%sdevice%stest"); sh("input keyevent KEYCODE_BACK")
+        n, c = step("text entered", 2, quiet=True)
+        tap_node(n, r"^Convert$", "Convert")
+    elif any("documentsui" in (p or "") for p in pkgs):
+        pick_in_documentsui(n, fname)
+    elif any("photos" in (p or "") for p in pkgs):
+        tap_node(n, r"^Download$", "Download album"); n, c = step("photos album", 4)
+        imgs = [bb for t, d, bb, p in n if "photos" in (p or "") and re.search(r"Photo|Image|convert_me", t + d, re.I)]
+        if imgs: tap_box(imgs[0]); time.sleep(1)
+        if len(imgs) > 1: tap_box(imgs[1]); time.sleep(1)
+        n, c = step("photos selected", 2)
+        tap_node(n, r"^(Done|Add|Select|OK)$", "confirm photos")
+    else:
         record(f"convert {tool}", False, "picker did not open" + (" (crash)" if c else "")); continue
-    if not tap_node(n, re.escape(fname), "pick file"):
-        tap_node(n, r"Show roots", "roots"); n, c = step("roots", 3)
-        tap_node(n, r"^Downloads?$", "downloads"); n, c = step("downloads", 4)
-        tap_node(n, re.escape(fname), "pick file")
-    n, c = step(f"after picking for {tool}", 4, quiet=True)
-    if tool == "Images to PDF" and any(p and "documentsui" in p for _, _, _, p in n):
-        tap_node(n, r"^Select$|^Done$|^OK$", "confirm selection")
     n, c = step(f"result for {tool}", 20)
-    msgs = [t or d for t, d, _, _ in n if re.search(r"success|saved|complete|fail|error|could not", t or d, re.I)]
-    new = sh("find /sdcard -newer /sdcard/.smoke_marker -type f \\( -name '*.pdf' -o -name '*.docx' \\) 2>/dev/null | grep -v convert_me").split()
-    record(f"convert {tool}", not c and alive() and bool(new), f"outputs={new} msgs={msgs}")
-    for f in new:
-        sh(f"touch -r /sdcard/.smoke_marker '{f}'")
+    msgs = [t or d for t, d, _, _ in n if re.search(r"success|saved|complete|fail|error|could not|empty", t or d, re.I)]
+    ok = not c and alive() and any(re.search(r"success", m, re.I) for m in msgs)
+    record(f"convert {tool}", ok, f"msgs={msgs}")
+    if ok and tap_node(n, r"^Open File$", "Open File"):
+        n, c = step(f"open output of {tool}", 12)
+        record(f"open output of {tool}", not c and alive())
     sh("input keyevent KEYCODE_BACK")
 
 # Cancel the picker without choosing: must not crash

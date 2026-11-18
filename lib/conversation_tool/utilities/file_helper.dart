@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 class FileHelper {
@@ -13,6 +14,8 @@ class FileHelper {
         type: FileType.custom,
         allowedExtensions: allowedExtensions,
       );
+      debugPrint('pickFile($allowedExtensions): '
+          '${result == null ? 'cancelled' : result.files.map((f) => '${f.name} path=${f.path}').join(', ')}');
 
       if (result != null && result.files.single.path != null) {
         return File(result.files.single.path!);
