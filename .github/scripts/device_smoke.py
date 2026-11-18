@@ -19,6 +19,8 @@ def dump(label):
         for n in root.iter("node"):
             t = (n.get("text") or "").strip()
             d = (n.get("content-desc") or "").strip()
+            if n.get("checkable") == "true":
+                d = d or ("SWITCH checked=" + n.get("checked"))
             if t or d:
                 nodes.append((t, d, n.get("bounds"), n.get("package")))
     except Exception as e:
@@ -55,25 +57,21 @@ def step(label, wait=4):
 
 def launch():
     sh(f"am force-stop {PKG}")
-    sh(f"monkey -p {PKG} -c android.intent.category.LAUNCHER 1")
+    sh("input keyevent KEYCODE_HOME")
+    print(sh(f"am start -W --activity-clear-task -n {PKG}/.MainActivity").strip()[-200:])
 
 scenario = sys.argv[1] if len(sys.argv) > 1 else "all"
 
 # 1. Fresh launch, no permission granted yet
 launch()
 n = step("first launch (no permission)", 10)
-for _ in range(3):
-    if tap_node(n, r"^(allow|ok|grant|continue)$|allow access|permit", "permission prompt"):
-        n = step("after permission tap", 4)
-        # system settings toggle for all-files access
-        if tap_node(n, r"allow access to manage all files|permit|all files", "all-files toggle"):
-            n = step("after toggle", 3)
-            sh("input keyevent KEYCODE_BACK")
-            n = step("back to app", 5)
-    else:
-        break
+if tap_node(n, r"SWITCH checked=false", "all-files switch"):
+    n = step("after switch on", 4)
+    sh("input keyevent KEYCODE_BACK")
+    n = step("back to app after granting", 8)
+    print("appops:", sh(f"appops get {PKG} MANAGE_EXTERNAL_STORAGE"))
 
-# 2. Grant all-files access directly and relaunch
+# 2. Make sure access is granted and relaunch cleanly
 sh(f"appops set --uid {PKG} MANAGE_EXTERNAL_STORAGE allow")
 launch()
 n = step("relaunch with all-files access", 12)
@@ -115,8 +113,8 @@ for name in tools:
         nn = step(f"after action for {name!r}", 15)
     sh("input keyevent KEYCODE_BACK")
 
-print("\n===== FLUTTER / RUNTIME ERRORS =====")
-log = adb("logcat", "-d")
+print("\n===== APP LOG =====")
+log = adb("logcat", "-d", "-v", "brief")
 for line in log.splitlines():
-    if re.search(r"AndroidRuntime|FATAL|flutter|E/PDFNet|Exception|Error:", line) and "chatty" not in line:
-        print(line[:400])
+    if re.search(r"flutter|FATAL|AndroidRuntime.*(FATAL|Process: com.example)|documentreader|pdftron|PDFNet|filepicker|FilePicker", line, re.I):
+        print(line[:500])
